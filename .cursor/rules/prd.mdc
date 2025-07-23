@@ -1,0 +1,198 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Cursor IDE Rule: Modern Affiliate E-commerce Platform
+## 1. Project Overview & Initialization
+
+**Goal:** Develop a modern affiliate e-commerce platform.
+**Core Technologies:**
+  - **Frontend:** Next.js (latest, App Router, Turbopack for dev), shadcn/ui
+  - **Backend:** Node.js with Express.js (RESTful API)
+  - **Database:** PostgreSQL
+  - **Real-time:** WebSockets (e.g., Socket.io)
+**Design Principles:** Mobile-first responsive design, clean and intuitive UX.
+**Security:** Secure authentication (JWT), API rate limiting, data validation.
+
+**Instructions for AI:**
+1.  Initialize a new Next.js project using the App Router. Configure it to use TypeScript.
+2.  Set up a basic Node.js/Express backend project structure, also with TypeScript.
+3.  Provide instructions or a `docker-compose.yml` for setting up a PostgreSQL instance.
+4.  Install `shadcn/ui` in the Next.js project and initialize it.
+5.  Install necessary libraries:
+    -   **Next.js:** `axios` (for API calls), a charting library (e.g., `recharts` or `chart.js`), `socket.io-client`.
+    -   **Node.js/Express:** `express`, `pg`, `bcryptjs`, `jsonwebtoken`, `cors`, `dotenv`, `express-validator`, `express-rate-limit`, `socket.io`, `uuid`. Relevant `@types/*` for TypeScript.
+
+## 2. Backend Development (Node.js/Express API & PostgreSQL)
+
+### 2.1. Database Schema (PostgreSQL)
+Create SQL table definitions for the following. Include appropriate indexing (primary keys, foreign keys, indexes on frequently queried columns like dates, user_id, status, etc.).
+
+-   **`users` (Affiliates):**
+    -   `id` (UUID, Primary Key)
+    -   `name` (VARCHAR, NOT NULL)
+    -   `email` (VARCHAR, UNIQUE, NOT NULL)
+    -   `password_hash` (VARCHAR, NOT NULL)
+    -   `phone_number` (VARCHAR, NULLABLE)
+    -   `profile_picture_url` (VARCHAR, NULLABLE)
+    -   `affiliate_id` (VARCHAR, UNIQUE, NOT NULL)
+    -   `created_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+    -   `updated_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+-   **`products`:**
+    -   `id` (UUID, Primary Key)
+    -   `name` (VARCHAR, NOT NULL)
+    -   `description` (TEXT, NULLABLE)
+    -   `image_url` (VARCHAR, NOT NULL)
+    -   `price` (DECIMAL(10, 2), NOT NULL)
+    -   `category_id` (UUID, NULLABLE, FK to `product_categories.id`)
+    -   `pre_written_marketing_content` (TEXT, NULLABLE)
+    -   `is_best_seller` (BOOLEAN, DEFAULT FALSE) -- For top 5 best-selling
+    -   `created_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+    -   `updated_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+-   **`product_categories`:**
+    -   `id` (UUID, Primary Key)
+    -   `name` (VARCHAR, UNIQUE, NOT NULL)
+-   **`sales`:**
+    -   `id` (UUID, Primary Key)
+    -   `transaction_id` (VARCHAR, UNIQUE, NOT NULL)
+    -   `user_id` (UUID, NOT NULL, FK to `users.id`) -- The affiliate who made the sale
+    -   `product_id` (UUID, NOT NULL, FK to `products.id`)
+    -   `sale_amount` (DECIMAL(10, 2), NOT NULL)
+    -   `commission_percentage` (DECIMAL(5, 2), NOT NULL)
+    -   `earnings_amount` (DECIMAL(10, 2), NOT NULL) -- Calculated: sale_amount * (commission_percentage / 100)
+    -   `sale_date` (TIMESTAMP WITH TIME ZONE, NOT NULL)
+    -   `created_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+-   **`payouts` (Disbursements):**
+    -   `id` (UUID, Primary Key)
+    -   `user_id` (UUID, NOT NULL, FK to `users.id`)
+    -   `amount` (DECIMAL(10, 2), NOT NULL)
+    -   `payment_method_id` (UUID, NOT NULL, FK to `user_payment_methods.id`)
+    -   `status` (VARCHAR -- e.g., 'pending', 'processing', 'paid', 'failed', NOT NULL)
+    -   `payout_transaction_id` (VARCHAR, NULLABLE, UNIQUE) -- ID from payment processor
+    -   `scheduled_date` (TIMESTAMP WITH TIME ZONE, NULLABLE)
+    -   `processed_date` (TIMESTAMP WITH TIME ZONE, NULLABLE)
+    -   `created_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+-   **`user_payment_methods`:**
+    -   `id` (UUID, Primary Key)
+    -   `user_id` (UUID, NOT NULL, FK to `users.id`)
+    -   `method_type` (VARCHAR -- e.g., 'paypal', 'bank_transfer', NOT NULL)
+    -   `details` (JSONB, NOT NULL) -- Encrypted, containing email for PayPal, or account details for bank
+    -   `is_primary` (BOOLEAN, DEFAULT FALSE)
+    -   `created_at` (TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP)
+
+### 2.2. API Endpoints (Node.js/Express)
+Generate boilerplate for the following RESTful API endpoints. Include request validation (`express-validator`), authentication middleware (JWT check), and basic controller logic. Implement WebSocket emissions for relevant real-time updates.
+
+-   **Auth (`/api/auth`):**
+    -   `POST /register` (name, email, password, phone_number)
+    -   `POST /login` (email, password) -> Returns JWT
+    -   `POST /logout` (requires JWT)
+-   **User/Profile (`/api/profile` - all require JWT):**
+    -   `GET /me` -> Returns current user details (excluding sensitive info like password_hash)
+    -   `PUT /me` -> Updates name, phone_number
+    -   `POST /me/profile-picture` -> Handles file upload (e.g., to a local folder or cloud storage placeholder), updates `profile_picture_url`
+    -   `PUT /me/password` -> Changes password (currentPassword, newPassword)
+    -   `GET /me/payment-methods`
+    -   `POST /me/payment-methods` (method_type, details)
+    -   `PUT /me/payment-methods/:methodId` (details, is_primary)
+    -   `DELETE /me/payment-methods/:methodId`
+-   **Dashboard (`/api/dashboard` - all require JWT):**
+    -   `GET /metrics` -> Returns Total Earnings, Total Received, Total Due (from `payouts` and `sales`), Total Revenue (sum of `sales.sale_amount`). **Emit updates via WebSocket.**
+    -   `GET /recent-sales` -> Returns last 10 sales for the user. **Emit updates via WebSocket.**
+    -   `GET /earnings-chart-data` -> Data for earnings trend chart (e.g., last 30 days).
+-   **Products (`/api/products` - public or JWT, define access):**
+    -   `GET /` -> List all products with pagination/infinite scroll support (query params: `page`, `limit`, `category`).
+    -   `GET /best-selling` -> List top 5 products (based on `is_best_seller` flag or sales count).
+    -   `GET /:productId/affiliate-link` (requires JWT) -> Generates/retrieves unique affiliate link for the user and product.
+    -   `GET /categories` -> List all product categories.
+-   **Sales Report (`/api/reports/sales` - requires JWT):**
+    -   `GET /` -> Get sales with filters: `dateFrom`, `dateTo`, `productCategoryId`, `commissionMin`, `commissionMax`.
+        -   Implement CSV/PDF export logic (or placeholders for it).
+-   **Earnings Status (`/api/earnings` - requires JWT):**
+    -   `GET /summary` -> Detailed breakdown of disbursements.
+    -   `GET /history` -> Payout transaction history with status.
+    -   `GET /schedule` -> Upcoming/past payment schedule data.
+
+### 2.3. WebSocket Setup
+-   Integrate Socket.io with the Express server.
+-   Implement authentication for WebSocket connections (e.g., pass JWT during connection handshake).
+-   Set up logic to emit events for:
+    -   New sales for an affiliate.
+    -   Updates to dashboard metrics.
+
+### 2.4. Security & Other
+-   Implement JWT generation and verification middleware.
+-   Use `bcryptjs` for password hashing.
+-   Set up basic API rate limiting using `express-rate-limit`.
+-   Implement CORS.
+-   Set up environment variable handling (`dotenv`).
+
+## 3. Frontend Development (Next.js App Router & shadcn/ui)
+
+### 3.1. Global Setup
+-   Create a main layout (`layout.tsx`) that includes the Sidebar Navigation.
+-   Implement an AuthContext/Provider to manage user authentication state and JWT.
+-   Set up a WebSocket client to connect to the backend and listen for real-time updates.
+
+### 3.2. Sidebar Navigation Component
+-   Clean, collapsible sidebar.
+-   Links: Dashboard, Products, Sales Report, Earning Record, Profile, Logout button.
+-   Use `shadcn/ui` components for styling if possible (e.g., `Sheet` for mobile, or custom).
+
+### 3.3. Page Implementations
+For each page, create the route in the `app` directory and use `shadcn/ui` components extensively. Implement calls to the backend API.
+
+-   **Dashboard (`/dashboard`):**
+    -   **Metric Cards:** Use `Card` component from `shadcn/ui`. Display: Total Earnings, Total Received, Total Due, Total Revenue. Fetch data and update via WebSocket.
+    -   **Interactive Charts:** Use Recharts/Chart.js. Fetch data from `/api/dashboard/earnings-chart-data`.
+    -   **Recent Sales Table:** Use `Table` component from `shadcn/ui`. Columns: Date, Product Name, Sale Amount, Commission Earned. Fetch data and update via WebSocket.
+-   **Products (`/products`):**
+    -   **Best-Selling Carousel:** Use `Carousel` component from `shadcn/ui`. Display top 5 products.
+    -   **All Products:** Implement infinite scroll or pagination.
+    -   **Product Card Component:**
+        -   Product Image, Name, Price.
+        -   "Copy Affiliate Link" `Button`.
+        -   "View Marketing Content" `Dialog` or `Accordion` for pre-written content.
+        -   Social share `Button`s (can be simple links initially).
+-   **Sales Report (`/sales-report`):**
+    -   **Data Visualization:** Charts for sales data (line/bar).
+    -   **Filterable Table:** Use `Table`.
+        -   Columns: Date of Sale, Transaction ID, Product Details, Amount, Commission Percentage, Earnings.
+        -   Filters: `DatePicker` for date range, `Select` for product category, `Slider` for commission range. Use `shadcn/ui` components.
+    -   **Export Buttons:** `Button`s for CSV/PDF (implement frontend part, backend handles generation).
+-   **Earnings Status (`/earning-record`):**
+    -   Use `Tabs` from `shadcn/ui` for "Pending" vs. "Processed" payments.
+    -   Detailed breakdown of disbursements.
+    -   Transaction history table (`Table`) with status indicators.
+    -   Payment schedule calendar (use `Calendar` from `shadcn/ui` and mark payout dates).
+-   **Profile Management (`/profile`):**
+    -   Use `Input`, `Button`, `Avatar` from `shadcn/ui`.
+    -   **Editable Fields:** Profile picture (drag-drop upload component or simple file input), Name, Phone number.
+    -   **Payment Methods:**
+        -   List current methods.
+        -   Form (`Dialog`) to add new methods (PayPal, Bank Transfer).
+        -   Ability to set primary, edit, delete.
+    -   Display unique affiliate ID (read-only).
+    -   **Password Change:** Form with current password, new password, confirm new password `Input` fields.
+-   **Login/Register Pages (`/login`, `/register`):**
+    -   Simple forms using `shadcn/ui` components (`Input`, `Button`, `Label`, `Card`).
+
+### 3.4. General Frontend Tasks:
+-   Implement form handling and validation (e.g., using `react-hook-form` with `zod` for schema validation, compatible with `shadcn/ui`).
+-   Show loading states and handle API errors gracefully (e.g., using `sonner` or `Toast` from `shadcn/ui`).
+-   Ensure all pages and components are responsive.
+-   Implement client-side protected routes that redirect to login if not authenticated.
+
+## 4. Data Caching Strategy
+
+-   **Backend:** Suggest where to use caching (e.g., Redis or in-memory) for frequently accessed, less volatile data (like product categories, or heavily aggregated dashboard stats if not fully real-time).
+-   **Frontend:** Utilize Next.js built-in data caching (fetch options, Route Segment Config) and consider `react-query` or SWR for client-side data fetching, caching, and synchronization.
+
+## 5. API Rate Limiting
+
+-   Implement basic rate limiting on the backend for all API routes, and stricter limits for sensitive operations like login attempts.
+
+**Final Instruction to AI:**
+
+"Generate the project structure and boilerplate code for the features and components described above. Focus on clear separation of concerns, reusability, and adherence to the specified technologies. Provide comments where complex logic is needed or where further implementation details are required."
