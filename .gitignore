@@ -42,5 +42,12 @@ ehthumbs.db
 Thumbs.db
 
 # Local data
-data/transcripts/
-data/summaries/ 
+data/debug/
+
+# Keep data directories but not large files
+data/transcripts/*.txt
+data/summaries/*.txt
+
+# Make sure the data directories exist for Heroku
+!data/transcripts/.gitkeep
+!data/summaries/.gitkeep 
