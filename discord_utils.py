@@ -12,7 +12,7 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-async def send_discord_message(webhook_url, content=None, title=None, description=None, fields=None, color=None):
+async def send_discord_message(webhook_url, content=None, title=None, description=None, fields=None, color=None, thumbnail=None):
     """
     Send a message to a Discord webhook
     
@@ -23,6 +23,7 @@ async def send_discord_message(webhook_url, content=None, title=None, descriptio
         description (str, optional): Embed description
         fields (list, optional): List of field dicts with name and value
         color (int, optional): Embed color (decimal, not hex)
+        thumbnail (str, optional): URL for the thumbnail image
     """
     if not webhook_url:
         print("No webhook URL provided")
@@ -35,7 +36,7 @@ async def send_discord_message(webhook_url, content=None, title=None, descriptio
         payload["content"] = content
     
     # Create embed if any embed data is provided
-    if title or description or fields or color:
+    if title or description or fields or color or thumbnail:
         embed = {}
         
         if title:
@@ -62,6 +63,10 @@ async def send_discord_message(webhook_url, content=None, title=None, descriptio
                     embed_field["inline"] = field["inline"]
                     
                 embed["fields"].append(embed_field)
+        
+        # Add thumbnail if provided
+        if thumbnail:
+            embed["thumbnail"] = {"url": thumbnail}
                 
         if color:
             embed["color"] = color

@@ -2,6 +2,7 @@
 import os
 import json
 import asyncio
+from dotenv import load_dotenv
 from discord_listener import DiscordListener
 from schedule import setup_scheduler
 from fastapi import FastAPI, Body, Request, Depends, HTTPException
@@ -9,19 +10,30 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import subprocess
 import sys
+import logging
 from transcript import get_transcript, extract_video_id
 from summarize import chunk_and_summarize, generate_daily_report
 from discord_utils import send_discord_message, send_file_to_discord
 from supabase_utils import get_config as get_supabase_config, save_config as save_supabase_config
 from supabase_utils import get_all_summaries as get_all_supabase_summaries
+from supabase_utils import get_tracked_channels, save_tracked_channel, delete_tracked_channel, update_last_video
+from youtube_tracker import check_tracked_channels, get_latest_videos_from_channel
 from pydantic import BaseModel
 from datetime import datetime
 import pytz
+import re
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Create FastAPI app for the API endpoints
 app = FastAPI(title="YouTube Summary Bot API")
 
-# Configure CORS
+# CORS middleware setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with actual origins
@@ -29,6 +41,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Health check endpoint
+@app.get("/api/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "server_time": datetime.now().isoformat()
+    }
 
 # Define request models
 class ConfigModel(BaseModel):
@@ -42,6 +64,9 @@ class ConfigModel(BaseModel):
 
 class TestRequestModel(BaseModel):
     youtube_url: str
+
+class ChannelRequestModel(BaseModel):
+    channel: str
 
 class WebhookModel(BaseModel):
     content: str = ""
@@ -247,10 +272,22 @@ async def trigger_daily_report(authorized: bool = Depends(verify_token)):
         
         if not today_summaries:
             print("No summaries found for today")
+            today_date = datetime.now().strftime("%A, %B %d, %Y")
+            no_videos_message = (
+                f"## 📅 Daily Summary Report: {today_date}\n\n"
+                f"### 📭 No New Videos Today\n\n"
+                f"No new videos were summarized in the past 24 hours.\n\n"
+                f"This could be because:\n"
+                f"• No new videos were uploaded to tracked channels\n"
+                f"• Videos were uploaded but haven't been processed yet\n"
+                f"• Videos were shorts or livestreams (which are excluded by default)\n\n"
+                f"You can check the channel tracking tab to verify the status of your tracked channels."
+            )
+            
             await send_discord_message(
                 daily_report_webhook,
-                title="Daily Summary Report",
-                description="No new videos were summarized today.",
+                title=f"📅 Daily Summary Report: {today_date}",
+                description=no_videos_message,
                 color=16776960  # Yellow
             )
             return {"status": "success", "message": "No summaries found for today"}
@@ -353,6 +390,240 @@ def regenerate_webhook_token():
     
     return {"token": new_token}
 
+@app.post("/api/channels/check/{channel}")
+async def check_channel(channel: str):
+    """Manually check a YouTube channel for new videos"""
+    logger.info(f"Manual check requested for channel: {channel}")
+    try:
+        # Get latest video from channel
+        latest = get_latest_videos_from_channel(channel)
+        
+        if latest:
+            # Format the result
+            return {
+                "status": "success",
+                "video": {
+                    "id": latest["id"],
+                    "title": latest["title"],
+                    "channel": latest["channel_name"],
+                    "published": latest["publish_time"],
+                    "url": latest["url"]
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Could not fetch latest video from {channel}"
+            }
+    except Exception as e:
+        logger.error(f"Error checking channel {channel}: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/api/channels/add")
+async def add_channel(request: ChannelRequestModel):
+    """Add a YouTube channel to track"""
+    try:
+        channel = request.channel
+        # Normalize the channel handle
+        if '/' in channel:
+            # Extract handle from URL
+            match = re.search(r'youtube\.com/(@[^/]+|channel/[^/]+|c/[^/]+)', channel)
+            if match:
+                channel = match.group(1)
+        elif not channel.startswith('@') and not channel.startswith('channel/') and not channel.startswith('c/'):
+            channel = '@' + channel
+            
+        # Load tracking data
+        tracking_data = get_tracked_channels()
+        tracked_channels = tracking_data.get("tracked_channels", [])
+        
+        # Check if channel is already tracked
+        if channel in tracked_channels:
+            return {
+                "status": "error",
+                "message": f"Channel {channel} is already being tracked"
+            }
+        
+        # Test if channel exists
+        test_result = get_latest_videos_from_channel(channel)
+        if test_result:
+            # Add channel to tracking
+            save_tracked_channel(channel)
+            
+            return {
+                "status": "success",
+                "message": f"Added {channel} to tracked channels"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Could not verify channel {channel}"
+            }
+    except Exception as e:
+        logger.error(f"Error adding channel {request.channel}: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.get("/api/channels")
+async def get_channels():
+    """Get list of tracked YouTube channels"""
+    try:
+        tracking_data = get_tracked_channels()
+        tracked_channels = tracking_data.get("tracked_channels", [])
+        last_videos = tracking_data.get("last_videos", {})
+        
+        # Format the result
+        channels = []
+        for channel in tracked_channels:
+            channel_info = {
+                "channel": channel,
+                "last_video": last_videos.get(channel)
+            }
+            channels.append(channel_info)
+            
+        return {
+            "status": "success",
+            "channels": channels
+        }
+    except Exception as e:
+        logger.error(f"Error getting channels: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.delete("/api/channels/{channel}")
+async def remove_channel(channel: str):
+    """Remove a YouTube channel from tracking"""
+    try:
+        # Load tracking data
+        tracking_data = get_tracked_channels()
+        tracked_channels = tracking_data.get("tracked_channels", [])
+        
+        # Check if channel is tracked
+        if channel not in tracked_channels:
+            return {
+                "status": "error",
+                "message": f"Channel {channel} is not being tracked"
+            }
+        
+        # Remove channel from tracking
+        delete_tracked_channel(channel)
+        
+        return {
+            "status": "success",
+            "message": f"Removed {channel} from tracked channels"
+        }
+    except Exception as e:
+        logger.error(f"Error removing channel {channel}: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+async def process_notification(notification: str):
+    """
+    Process a notification message about a new YouTube video
+    
+    Args:
+        notification (str): Notification message in the format "{channel} just posted a new video! youtu.be/{video_id}"
+        
+    Returns:
+        bool: True if processed successfully, False otherwise
+    """
+    try:
+        discord_listener = DiscordListener()
+        
+        # Check if this is a short before processing
+        video_id = None
+        url_match = re.search(r'youtu\.be\/([a-zA-Z0-9_-]{11})', notification)
+        if url_match:
+            video_id = url_match.group(1)
+        
+        # If we can't extract the video ID, just process normally
+        if not video_id:
+            return await discord_listener.process_message(notification)
+            
+        # Check if this might be a short before processing
+        try:
+            import requests
+            metadata_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            response = requests.get(metadata_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # Check for shorts indicators
+                title = data.get('title', '').lower()
+                author = data.get('author_name', '').lower()
+                
+                # Check if it's likely a short
+                is_short = False
+                if '#shorts' in title or '#short' in title:
+                    is_short = True
+                elif 'height' in data and 'width' in data and data['height'] > data['width']:
+                    is_short = True
+                
+                if is_short:
+                    logger.info(f"Skipping short in automatic processing: {video_id}")
+                    # Don't process shorts automatically, but return True as this is expected behavior
+                    return True
+        except Exception as e:
+            logger.error(f"Error checking if video is a short: {e}")
+        
+        # Process the message normally if it's not detected as a short
+        return await discord_listener.process_message(notification)
+    except Exception as e:
+        logger.error(f"Error processing notification: {e}")
+        return False
+
+async def manual_check_channels():
+    """
+    Manually check tracked channels for new videos
+    
+    Returns:
+        int: Number of new videos found
+    """
+    try:
+        # Define callback function to process videos
+        async def process_notification_async(notification):
+            return await process_notification(notification)
+        
+        # Create wrapper function for check_tracked_channels
+        def process_wrapper(notification):
+            return asyncio.run(process_notification_async(notification))
+        
+        # Check channels
+        return check_tracked_channels(process_wrapper)
+    except Exception as e:
+        logger.error(f"Error checking channels: {e}")
+        return 0
+
+@app.post("/api/channels/check-all")
+async def check_all_channels():
+    """
+    Manually trigger a check of all tracked channels
+    
+    Returns:
+        dict: Result of the channel check
+    """
+    try:
+        new_videos = await manual_check_channels()
+        return {
+            "status": "success",
+            "new_videos_count": new_videos,
+            "message": f"Found and processed {new_videos} new videos"
+        }
+    except Exception as e:
+        logger.error(f"Error checking all channels: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 async def start_bot():
     """Start the Discord listener and scheduler in the background"""
     discord_listener = DiscordListener()
@@ -380,8 +651,15 @@ async def start_bot():
 
 async def trigger_daily_report_task():
     """Task to trigger the daily report"""
-    print("Scheduled daily report triggered")
-    await trigger_daily_report(True)
+    logger.info("Scheduled daily report triggered")
+    try:
+        # We need to bypass the auth requirement since this is triggered by the scheduler
+        result = await trigger_daily_report(True)
+        logger.info(f"Daily report result: {result.get('status', 'unknown')} - {result.get('message', 'No message')}")
+        return result
+    except Exception as e:
+        logger.error(f"Error in daily report task: {e}")
+        return {"status": "error", "message": str(e)}
 
 def start_streamlit():
     """Start the Streamlit UI in a separate process"""

@@ -23,11 +23,12 @@ Format your response like this:
 
 {
   "title": "Insert video title here",
-  "summary": [
+  "points": [
     "Key point 1",
     "Key point 2",
     "Key point 3"
   ],
+  "summary": "A concise paragraph summarizing the main content",
   "noteworthy_mentions": [
     "Person, project, or tool name if mentioned",
     "Important reference or example"
@@ -35,15 +36,23 @@ Format your response like this:
   "verdict": "Brief 1-line overall takeaway"
 }"""
 
-DEFAULT_DAILY_REPORT_PROMPT = """You are an expert content analyst.
-Given a list of video summaries from the last 24 hours, your job is to:
-Rate each video on a scale from 1 to 10 based on how interesting and watch-worthy it is.
-Identify the most engaging topics across all videos.
-Highlight 3 key takeaways or trends from these videos.
-Write a clear, professional daily report in natural language (no JSON).
+DEFAULT_DAILY_REPORT_PROMPT = """You are an expert content analyst creating daily summaries for YouTube videos.
+Given a list of video summaries from the last 24 hours, your job is to create a concise, informative daily report.
 
-Make it easy to read, concise, and useful. Avoid technical jargon.
-Output the report as plain text suitable for sharing in a Discord channel."""
+Include the following sections in your report:
+1. **Highlights** - Brief overview of the day's most important videos
+2. **Top Videos** - Rate the top 2-3 videos on a scale of 1-10 and explain why they're worth watching
+3. **Key Topics** - Identify 3-5 main topics or themes across all videos
+4. **Takeaways** - List 3-5 key insights or lessons from today's videos
+5. **Recommendations** - Suggest which video(s) viewers should prioritize watching
+
+FORMAT YOUR REPORT:
+- Use proper Discord markdown format with headers and bullet points
+- Keep paragraphs short for easy reading on mobile
+- Make your report engaging and informative
+- Write in a neutral, professional tone
+
+The report will be shared in a Discord channel, so format it accordingly using markdown for structure."""
 
 def load_config():
     """Load configuration from Supabase or fall back to local file"""
@@ -208,10 +217,9 @@ async def chunk_and_summarize(transcript, api_key, video_id=None):
     
     # Get the custom prompt from config
     summary_prompt = get_summary_prompt()
-    system_message = f"""You are creating a final summary from multiple section summaries of a transcript.
-{summary_prompt}"""
+    system_message = summary_prompt
     
-    # Define functions for final summary - customized to match our new format
+    # Define functions for final summary - customized to match our format expectations
     final_functions = [
         {
             "name": "create_final_summary",
@@ -246,7 +254,7 @@ async def chunk_and_summarize(transcript, api_key, video_id=None):
                         "description": "Brief 1-line overall takeaway from the video"
                     }
                 },
-                "required": ["title", "points", "summary"]
+                "required": ["title", "points", "summary", "verdict"]
             }
         }
     ]
@@ -467,7 +475,7 @@ async def generate_summary(transcript, api_key, system_prompt=None):
                         "description": "Brief 1-line overall takeaway from the video"
                     }
                 },
-                "required": ["title", "points", "summary"]
+                "required": ["title", "points", "summary", "verdict"]
             }
         }
     ]
@@ -548,6 +556,29 @@ async def generate_daily_report(summaries, api_key):
     )
     
     if report_data and "report" in report_data:
-        return report_data["report"]
+        # Format the report for Discord with proper line breaks and formatting
+        report = report_data["report"]
+        
+        # Format sections with better Discord markdown
+        # Replace section headers with bold formatting
+        report = re.sub(r'^(#+)\s+(.+)$', r'**\2**', report, flags=re.MULTILINE)
+        
+        # Add emojis to common section names for visual appeal
+        report = report.replace("**Summary**", "**📋 Summary**")
+        report = report.replace("**Top Videos**", "**🏆 Top Videos**")
+        report = report.replace("**Trending Topics**", "**📈 Trending Topics**")
+        report = report.replace("**Key Takeaways**", "**💡 Key Takeaways**")
+        report = report.replace("**Recommendations**", "**👍 Recommendations**")
+        
+        # Ensure proper spacing between sections
+        report = re.sub(r'\n{3,}', '\n\n', report)
+        
+        # Make sure bullet points use Discord-friendly format
+        report = re.sub(r'^[-*]\s+', '• ', report, flags=re.MULTILINE)
+        
+        # Format any links for better visibility
+        report = re.sub(r'(?<!\[)(https?://\S+)(?!\))', r'<\1>', report)
+        
+        return report
     
     return "Failed to generate daily report. Please check the logs for details." 
