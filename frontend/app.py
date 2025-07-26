@@ -10,12 +10,23 @@ import asyncio
 import json
 import time
 import requests
-from dotenv import load_dotenv
+
+# Only load dotenv for local development, not in production
+if not hasattr(st, 'secrets') or os.getenv('STREAMLIT_SHARING', 'false').lower() != 'true':
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # dotenv not available in production, that's fine
 
 def get_backend_url():
     """Get backend URL from environment or secrets"""
     # Try Streamlit secrets first (for production)
     try:
+        # Try direct access first
+        if hasattr(st, 'secrets') and "BACKEND_URL" in st.secrets:
+            return st.secrets["BACKEND_URL"]
+        # Try nested access
         return st.secrets["general"]["backend_url"]
     except:
         pass
@@ -26,6 +37,7 @@ def get_backend_url():
         return backend_url
     
     # Default to localhost for development
+    return "http://localhost:8000"
     return "http://localhost:8000"
 
 def sanitize_filename(title):
