@@ -52,16 +52,44 @@ def sanitize_filename(title):
     if len(sanitized) > 100:
         sanitized = sanitized[:100]
     return sanitized
-from shared.transcript import get_transcript, extract_video_id
-from shared.summarize import chunk_and_summarize, DEFAULT_SUMMARY_PROMPT, DEFAULT_DAILY_REPORT_PROMPT
-from shared.discord_utils import send_discord_message, send_file_to_discord
-from shared.discord_listener import DiscordListener
-from shared.supabase_utils import get_config as get_supabase_config, save_config as save_supabase_config
-from shared.supabase_utils import get_transcript as get_supabase_transcript, get_summary as get_supabase_summary
-from shared.youtube_tracker import get_latest_videos_from_channel, load_tracking_data, save_tracking_data
 
-# Load environment variables from .env file
-load_dotenv()
+# Try to import shared modules with fallback
+try:
+    from shared.transcript import get_transcript, extract_video_id
+    from shared.summarize import chunk_and_summarize, DEFAULT_SUMMARY_PROMPT, DEFAULT_DAILY_REPORT_PROMPT
+    from shared.discord_utils import send_discord_message, send_file_to_discord
+    from shared.discord_listener import DiscordListener
+    from shared.supabase_utils import get_config as get_supabase_config, save_config as save_supabase_config
+    from shared.supabase_utils import get_transcript as get_supabase_transcript, get_summary as get_supabase_summary
+    from shared.youtube_tracker import get_latest_videos_from_channel, load_tracking_data, save_tracking_data
+    SHARED_MODULES_AVAILABLE = True
+except ImportError as e:
+    # In production, shared modules might not be available due to missing dependencies
+    # We'll use API calls to the backend instead
+    SHARED_MODULES_AVAILABLE = False
+    st.warning(f"Shared modules not available: {e}. Using API mode.")
+    
+    # Define fallback functions that use API calls
+    def get_transcript(url):
+        backend_url = get_backend_url()
+        return requests.post(f"{backend_url}/api/transcript", json={"url": url})
+        
+    def extract_video_id(url):
+        import re
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+            r'(?:embed\/)([0-9A-Za-z_-]{11})',
+            r'(?:v\/|v=|youtu\.be\/)([0-9A-Za-z_-]{11})'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    # Default prompts
+    DEFAULT_SUMMARY_PROMPT = "Summarize this video transcript"
+    DEFAULT_DAILY_REPORT_PROMPT = "Create a daily report"
 
 st.set_page_config(page_title="YouTube Summary", page_icon="📝", layout="wide")
 
