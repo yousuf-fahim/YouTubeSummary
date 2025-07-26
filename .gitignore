@@ -42,7 +42,24 @@ ehthumbs.db
 Thumbs.db
 
 # Local data
+# Debug files
+*/data/debug/
+**/debug/
+backend/data/debug/
 data/debug/
+
+# Sensitive configuration files
+*/data/config.json
+**/config.json
+backend/data/config.json
+frontend/data/config.json
+shared/data/config.json
+
+# Any files with credentials
+*secrets*
+*.env
+*.env.local
+*credentials*
 
 # Keep data directories but not large files
 data/transcripts/*.txt

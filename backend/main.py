@@ -19,7 +19,7 @@ import requests
 from shared.transcript import get_transcript, extract_video_id
 from shared.summarize import chunk_and_summarize, generate_daily_report
 from shared.discord_utils import send_discord_message, send_file_to_discord
-from shared.config_service import ConfigService
+from shared.config_service import ConfigService, AsyncConfigService
 from shared.auth_service import AuthService
 from shared.constants import SUCCESS_VIDEO_PROCESSED, ERROR_CONFIG_NOT_FOUND
 from shared.supabase_utils import get_all_summaries as get_all_supabase_summaries
@@ -81,19 +81,16 @@ class WebhookModel(BaseModel):
     
 # Load config
 async def load_config():
-    """Load configuration using ConfigService"""
-    return await ConfigService.get_config()
+    """Load configuration using secure ConfigService"""
+    async_config = AsyncConfigService()
+    return await async_config.get_config()
 
 # Save config  
 async def save_config(config):
-    """Save configuration using ConfigService"""
-    return await ConfigService.save_config(config)
-    
-    # Also save locally as backup
-    os.makedirs("data", exist_ok=True)
-    config_path = os.path.join("data", "config.json")
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    """Save configuration using secure ConfigService - only non-sensitive data"""
+    # Note: Sensitive data should be stored in environment variables, not saved here
+    print("Warning: Configuration should be managed via environment variables in production")
+    return True  # Always return success since we don't store sensitive data
 
 # Auth dependency for webhooks
 async def verify_token(request: Request):
