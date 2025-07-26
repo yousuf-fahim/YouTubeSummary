@@ -11,11 +11,6 @@ import ssl
 # Add project root to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-import asyncio
-import json
-import time
-import requests
-
 # Only load dotenv for local development, not in production
 if not hasattr(st, 'secrets') or os.getenv('STREAMLIT_SHARING', 'false').lower() != 'true':
     try:
