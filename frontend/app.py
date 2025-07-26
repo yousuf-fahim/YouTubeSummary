@@ -1058,6 +1058,56 @@ def main():
         # Backend API endpoint
         backend_url = get_backend_url()
         
+        # Debug information section
+        st.subheader("🔧 Debug Info")
+        with st.expander("Environment Variables & Configuration"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Backend Configuration:**")
+                st.write(f"- Backend URL: {backend_url}")
+                st.write(f"- Environment BACKEND_URL: {os.getenv('BACKEND_URL', 'Not set')}")
+                st.write(f"- Shared modules available: {SHARED_MODULES_AVAILABLE}")
+                
+                st.write("**Supabase Configuration:**")
+                supabase_url = os.getenv('SUPABASE_URL', 'Not set')
+                supabase_key = os.getenv('SUPABASE_KEY', 'Not set')
+                st.write(f"- SUPABASE_URL: {supabase_url[:50]}{'...' if len(supabase_url) > 50 else ''}")
+                st.write(f"- SUPABASE_KEY: {'Set' if supabase_key != 'Not set' else 'Not set'}")
+            
+            with col2:
+                st.write("**API Keys:**")
+                openai_key = os.getenv('OPENAI_API_KEY', 'Not set')
+                st.write(f"- OpenAI API Key: {'Set' if openai_key != 'Not set' else 'Not set'}")
+                
+                st.write("**Discord Webhooks:**")
+                webhook_names = ['UPLOADS', 'TRANSCRIPTS', 'SUMMARIES', 'DAILY_REPORT']
+                for webhook_name in webhook_names:
+                    webhook_url = os.getenv(f'DISCORD_WEBHOOK_{webhook_name}', 'Not set')
+                    st.write(f"- {webhook_name}: {'Set' if webhook_url != 'Not set' else 'Not set'}")
+        
+        # Test Supabase connection
+        if st.button("Test Supabase Connection"):
+            with st.spinner("Testing Supabase connection..."):
+                try:
+                    if SHARED_MODULES_AVAILABLE:
+                        from shared.supabase_utils import get_supabase_client
+                        client = get_supabase_client()
+                        # Try a simple query to test the connection
+                        response = client.table('config').select('*').limit(1).execute()
+                        st.success("✅ Supabase connection successful!")
+                    else:
+                        st.warning("Shared modules not available - using API mode")
+                        # Test via backend API
+                        response = requests.get(f"{backend_url}/api/health")
+                        if response.status_code == 200:
+                            st.success("✅ Backend API connection successful!")
+                        else:
+                            st.error(f"❌ Backend API connection failed: {response.status_code}")
+                except Exception as e:
+                    st.error(f"❌ Supabase connection failed: {str(e)}")
+                    st.info("💡 Make sure SUPABASE_URL and SUPABASE_KEY are set correctly in your secrets.")
+        
         # Video processing test
         st.subheader("Video Processing Test")
         test_url = st.text_input("Test YouTube URL:", placeholder="https://www.youtube.com/watch?v=...", key="test_url")
