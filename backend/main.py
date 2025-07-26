@@ -9,7 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from dotenv import load_dotenv
 from shared.discord_listener import DiscordListener
-from schedule import setup_scheduler
+from .schedule import setup_scheduler
 from fastapi import FastAPI, Body, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn

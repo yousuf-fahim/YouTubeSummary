@@ -37,8 +37,7 @@ def get_backend_url():
         return backend_url
     
     # Default to localhost for development
-    return "http://localhost:8000"
-    return "http://localhost:8000"
+    return "http://localhost:8001"
 
 def sanitize_filename(title):
     """Convert video title to safe filename"""
