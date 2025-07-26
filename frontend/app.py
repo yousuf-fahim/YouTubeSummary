@@ -19,6 +19,22 @@ if not hasattr(st, 'secrets') or os.getenv('STREAMLIT_SHARING', 'false').lower()
     except ImportError:
         pass  # dotenv not available in production, that's fine
 
+# Set environment variables from Streamlit secrets before importing shared modules
+if hasattr(st, 'secrets'):
+    # Set all secrets as environment variables for shared modules
+    for key, value in st.secrets.items():
+        if isinstance(value, str):
+            os.environ[key] = value
+    
+    # Also handle nested secrets
+    try:
+        if "general" in st.secrets:
+            for key, value in st.secrets["general"].items():
+                if isinstance(value, str):
+                    os.environ[key] = value
+    except:
+        pass
+
 def get_backend_url():
     """Get backend URL from environment or secrets"""
     # Try Streamlit secrets first (for production)
