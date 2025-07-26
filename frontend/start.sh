@@ -2,6 +2,7 @@
 
 # Railway Start Script for Frontend v3.0
 echo "🚀 Starting YouTube Summary Bot Frontend (Railway v3.0)..."
+echo "📊 Current directory: $(pwd)"
 echo "📊 App.py line count: $(wc -l < app.py)"
 
 # Set default port if not provided
