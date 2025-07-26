@@ -1,17 +1,55 @@
 import streamlit as st
 import os
 import sys
+import re
+
+# Add project root to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 import asyncio
 import json
-import re
 import time
 import requests
-from transcript import get_transcript, extract_video_id
-from summarize import chunk_and_summarize, DEFAULT_SUMMARY_PROMPT, DEFAULT_DAILY_REPORT_PROMPT
-from discord_utils import send_discord_message, send_file_to_discord
-from discord_listener import DiscordListener
-from supabase_utils import get_config as get_supabase_config, save_config as save_supabase_config
-from supabase_utils import get_transcript as get_supabase_transcript, get_summary as get_supabase_summary
+from dotenv import load_dotenv
+
+def get_backend_url():
+    """Get backend URL from environment or secrets"""
+    # Try Streamlit secrets first (for production)
+    try:
+        return st.secrets["general"]["backend_url"]
+    except:
+        pass
+    
+    # Try environment variable
+    backend_url = os.getenv("BACKEND_URL")
+    if backend_url:
+        return backend_url
+    
+    # Default to localhost for development
+    return "http://localhost:8000"
+
+def sanitize_filename(title):
+    """Convert video title to safe filename"""
+    if not title:
+        return "unknown_video"
+    # Remove invalid characters for filenames
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Replace spaces with underscores and limit length
+    sanitized = sanitized.replace(' ', '_')
+    # Limit length to avoid filesystem issues
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized
+from shared.transcript import get_transcript, extract_video_id
+from shared.summarize import chunk_and_summarize, DEFAULT_SUMMARY_PROMPT, DEFAULT_DAILY_REPORT_PROMPT
+from shared.discord_utils import send_discord_message, send_file_to_discord
+from shared.discord_listener import DiscordListener
+from shared.supabase_utils import get_config as get_supabase_config, save_config as save_supabase_config
+from shared.supabase_utils import get_transcript as get_supabase_transcript, get_summary as get_supabase_summary
+from shared.youtube_tracker import get_latest_videos_from_channel, load_tracking_data, save_tracking_data
+
+# Load environment variables from .env file
+load_dotenv()
 
 st.set_page_config(page_title="YouTube Summary", page_icon="📝", layout="wide")
 
@@ -39,7 +77,7 @@ def load_config():
         return supabase_config
     
     # Fall back to local file if Supabase config not available
-    config_path = os.path.join("data", "config.json")
+    config_path = os.path.join(os.path.dirname(__file__), "..", "shared", "data", "config.json")
     
     if not os.path.exists(config_path):
         return {
@@ -438,7 +476,7 @@ def main():
         """)
     
     # Tabs for different functionality
-    tab1, tab2, tab3, tab4 = st.tabs(["YouTube Summary", "Configuration", "Discord Testing", "Webhook Setup"])
+    tab1, tab2, tab3, tab4 = st.tabs(["YouTube Summary", "Configuration", "Channel Tracking", "Testing"])
     
     with tab1:
         st.header("Generate YouTube Summary")
@@ -554,11 +592,11 @@ def main():
                                         else:
                                             st.error("Failed to generate summary. Please try again.")
                                             if st.button("Retry"):
-                                                st.experimental_rerun()
+                                                st.rerun()
                                 except Exception as e:
                                     st.error(f"Error generating summary: {str(e)}")
                                     if st.button("Retry"):
-                                        st.experimental_rerun()
+                                        st.rerun()
                         else:
                             st.error("Could not retrieve transcript for this video. Please check the URL and try again.")
                             
@@ -591,7 +629,7 @@ def main():
                                 if st.button("Use Sample Video"):
                                     # Rick Astley's "Never Gonna Give You Up" has captions
                                     st.session_state.sample_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-                                    st.experimental_rerun()
+                                    st.rerun()
     
     with tab2:
         st.header("Configuration")
@@ -601,63 +639,70 @@ def main():
         
         with config_tabs[0]:
             st.subheader("OpenAI API Key")
-        # OpenAI API Key Configuration
-        api_key_input = st.text_input("OpenAI API Key:", value=api_key, type="password",
-                                    help="Your OpenAI API key is required for generating summaries.")
-        
-        # Test API key button
-        if st.button("Test API Key"):
-            if not api_key_input:
-                st.error("Please enter an API key first.")
-            else:
-                with st.spinner("Testing API key..."):
-                    if test_openai_api_key(api_key_input):
-                        st.success("API key is valid!")
+            
+            # OpenAI API Key Configuration
+            api_key_input = st.text_input("OpenAI API Key:", value=api_key, type="password",
+                                        help="Your OpenAI API key is required for generating summaries.")
+            
+            # Test API key button
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Test API Key"):
+                    if not api_key_input:
+                        st.error("Please enter an API key first.")
                     else:
-                        st.error("API key is invalid or has insufficient permissions")
-        
-            # Save button for this section
-            if st.button("Save API Key"):
-                current_config = config.copy()
-                current_config["openai_api_key"] = api_key_input
-                save_config(current_config)
-                st.success("API key saved successfully!")
-                
-                # Offer to restart the app if API key changed
-                if api_key_input != api_key:
-                    st.warning("You've changed the API key. The application may need to be restarted for changes to take full effect.")
+                        with st.spinner("Testing API key..."):
+                            if test_openai_api_key(api_key_input):
+                                st.success("API key is valid!")
+                            else:
+                                st.error("API key is invalid or has insufficient permissions")
+            
+            with col2:
+                # Save button for this section
+                if st.button("Save API Key"):
+                    current_config = config.copy()
+                    current_config["openai_api_key"] = api_key_input
+                    save_config(current_config)
+                    st.success("API key saved successfully!")
+                    
+                    # Offer to restart the app if API key changed
+                    if api_key_input != api_key:
+                        st.warning("You've changed the API key. The application may need to be restarted for changes to take full effect.")
         
         with config_tabs[1]:
             st.subheader("Discord Webhooks")
+            st.info("Configure Discord webhook URLs for notifications.")
+            
             # Discord Webhook Configuration
-        webhooks = config.get("webhooks", {})
-        uploads_webhook = st.text_input("YouTube Uploads Webhook:", 
-                                    value=webhooks.get("yt_uploads", ""),
-                                    help="Discord webhook URL for YouTube upload notifications.")
-        
-        transcripts_webhook = st.text_input("Transcripts Webhook:", 
-                                        value=webhooks.get("yt_transcripts", ""),
-                                        help="Discord webhook URL for transcript notifications.")
-        
-        summaries_webhook = st.text_input("Summaries Webhook:", 
-                                        value=webhooks.get("yt_summaries", ""),
-                                        help="Discord webhook URL for summary notifications.")
-        
-        daily_report_webhook = st.text_input("Daily Report Webhook:", 
-                                        value=webhooks.get("daily_report", ""),
-                                        help="Discord webhook URL for daily report notifications.")
-        
-        # Save button for webhooks section
-        if st.button("Save Webhooks"):
-            current_config = config.copy()
-            current_config["webhooks"] = {
-                "yt_uploads": uploads_webhook,
-                "yt_transcripts": transcripts_webhook,
-                "yt_summaries": summaries_webhook,
-                "daily_report": daily_report_webhook
-            }
-            save_config(current_config)
-            st.success("Webhooks saved successfully!")
+            webhooks = config.get("webhooks", {})
+            
+            uploads_webhook = st.text_input("YouTube Uploads Webhook:", 
+                                        value=webhooks.get("yt_uploads", ""),
+                                        help="Discord webhook URL for YouTube upload notifications.")
+            
+            transcripts_webhook = st.text_input("Transcripts Webhook:", 
+                                            value=webhooks.get("yt_transcripts", ""),
+                                            help="Discord webhook URL for transcript notifications.")
+            
+            summaries_webhook = st.text_input("Summaries Webhook:", 
+                                            value=webhooks.get("yt_summaries", ""),
+                                            help="Discord webhook URL for summary notifications.")
+            
+            daily_report_webhook = st.text_input("Daily Report Webhook:", 
+                                            value=webhooks.get("daily_report", ""),
+                                            help="Discord webhook URL for daily report notifications.")
+            
+            # Save button for webhooks section
+            if st.button("Save Webhooks"):
+                current_config = config.copy()
+                current_config["webhooks"] = {
+                    "yt_uploads": uploads_webhook,
+                    "yt_transcripts": transcripts_webhook,
+                    "yt_summaries": summaries_webhook,
+                    "daily_report": daily_report_webhook
+                }
+                save_config(current_config)
+                st.success("Webhooks saved successfully!")
         
         with config_tabs[2]:
             st.subheader("AI Prompts")
@@ -669,25 +714,25 @@ def main():
             daily_report_prompt = prompts.get("daily_report_prompt", DEFAULT_DAILY_REPORT_PROMPT)
             
             # Summary prompt
-            st.write("##### Summary Prompt")
+            st.write("**Summary Prompt**")
             st.write("This prompt is used to generate summaries for individual videos.")
-            summary_prompt_input = st.text_area("Summary Prompt:", value=summary_prompt, height=300)
+            summary_prompt_input = st.text_area("Summary Prompt:", value=summary_prompt, height=200)
             
             # Add a reset button for summary prompt
             if st.button("Reset to Default Summary Prompt"):
                 summary_prompt_input = DEFAULT_SUMMARY_PROMPT
                 st.session_state.summary_prompt_reset = True
-                st.experimental_rerun()
+                st.rerun()
             
-            st.write("##### Daily Report Prompt")
+            st.write("**Daily Report Prompt**")
             st.write("This prompt is used to generate daily reports from multiple video summaries.")
-            daily_report_prompt_input = st.text_area("Daily Report Prompt:", value=daily_report_prompt, height=300)
+            daily_report_prompt_input = st.text_area("Daily Report Prompt:", value=daily_report_prompt, height=200)
             
             # Add a reset button for daily report prompt
             if st.button("Reset to Default Daily Report Prompt"):
                 daily_report_prompt_input = DEFAULT_DAILY_REPORT_PROMPT
                 st.session_state.daily_report_prompt_reset = True
-                st.experimental_rerun()
+                st.rerun()
             
             # Save button for prompts
             if st.button("Save Prompts"):
@@ -702,205 +747,332 @@ def main():
                 st.success("Prompts saved successfully!")
     
     with tab3:
-        st.header("Discord Webhook Testing")
-        st.info("Use this tab to test your Discord webhook integrations.")
+        st.header("📺 Channel Tracking")
+        st.info("Track YouTube channels to automatically process their latest videos.")
         
-        # Load webhooks from config
+        # Backend API endpoint
+        backend_url = get_backend_url()
+        
+        # Get scheduler status
+        try:
+            scheduler_response = requests.get(f"{backend_url}/api/scheduler/status")
+            if scheduler_response.status_code == 200:
+                scheduler_data = scheduler_response.json()
+                
+                # Daily Report Status
+                st.subheader("📅 Daily Report Schedule")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Next Report", scheduler_data.get("time_until_next_report", "Unknown"))
+                with col2:
+                    st.metric("Schedule", scheduler_data.get("report_schedule", "Unknown"))
+                with col3:
+                    if st.button("🚀 Trigger Now"):
+                        # Get webhook token
+                        try:
+                            token_response = requests.get(f"{backend_url}/api/webhook-token")
+                            if token_response.status_code == 200:
+                                token = token_response.json()["token"]
+                                report_response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", 
+                                                              headers={"Authorization": f"Bearer {token}"})
+                                if report_response.status_code == 200:
+                                    st.success("Daily report triggered successfully!")
+                                else:
+                                    st.error("Failed to trigger daily report")
+                            else:
+                                st.error("Failed to get authentication token")
+                        except Exception as e:
+                            st.error(f"Error triggering report: {str(e)}")
+            else:
+                st.warning("Could not load scheduler status")
+        except Exception as e:
+            st.warning(f"Scheduler status unavailable: {str(e)}")
+        
+        st.divider()
+        
+        # Get detailed channel status
+        try:
+            status_response = requests.get(f"{backend_url}/api/channels/status")
+            if status_response.status_code == 200:
+                status_data = status_response.json()
+                
+                # Summary metrics
+                st.subheader("📊 Channel Status Overview")
+                col1, col2, col3, col4 = st.columns(4)
+                summary = status_data.get("summary", {})
+                with col1:
+                    st.metric("Total Channels", status_data.get("total_channels", 0))
+                with col2:
+                    st.metric("Up to Date", summary.get("active", 0), delta=None)
+                with col3:
+                    new_content = summary.get("new_content", 0)
+                    st.metric("New Content", new_content, delta=f"+{new_content}" if new_content > 0 else None)
+                with col4:
+                    errors = summary.get("errors", 0)
+                    st.metric("Errors", errors, delta=f"-{errors}" if errors > 0 else None)
+                
+                # Global actions
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("🔄 Check All Channels"):
+                        with st.spinner("Checking all channels for new videos..."):
+                            try:
+                                check_all_response = requests.post(f"{backend_url}/api/channels/check-all")
+                                if check_all_response.status_code == 200:
+                                    result = check_all_response.json()
+                                    st.success(f"Found and processed {result.get('new_videos_count', 0)} new videos")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to check channels")
+                            except Exception as e:
+                                st.error(f"Error checking channels: {str(e)}")
+                
+                st.divider()
+                
+                # Detailed channel list
+                st.subheader("📋 Channel Details")
+                
+                channels = status_data.get("channels", [])
+                if channels:
+                    for channel_info in channels:
+                        channel = channel_info["channel"]
+                        status = channel_info["status"]
+                        has_new = channel_info.get("has_new_videos", False)
+                        
+                        # Status icon and color
+                        if status == "up_to_date":
+                            status_icon = "✅"
+                            status_color = "green"
+                        elif status == "new_content_available":
+                            status_icon = "🆕"
+                            status_color = "orange"
+                        elif status == "error":
+                            status_icon = "❌"
+                            status_color = "red"
+                        else:
+                            status_icon = "⚪"
+                            status_color = "gray"
+                        
+                        # Create expandable section for each channel
+                        with st.expander(f"{status_icon} **{channel}** - {status.replace('_', ' ').title()}", expanded=has_new):
+                            col1, col2, col3 = st.columns([2, 2, 1])
+                            
+                            with col1:
+                                # Last known video
+                                last_video = channel_info.get("last_known_video", {})
+                                if last_video.get("id"):
+                                    st.write("**Last Tracked Video:**")
+                                    st.write(f"ID: `{last_video['id']}`")
+                                    if last_video.get("title"):
+                                        st.write(f"Title: {last_video['title']}")
+                                else:
+                                    st.write("**No videos tracked yet**")
+                            
+                            with col2:
+                                # Latest available video
+                                latest_video = channel_info.get("latest_available_video")
+                                if latest_video:
+                                    st.write("**Latest Available Video:**")
+                                    st.write(f"[{latest_video['title']}]({latest_video['url']})")
+                                    st.write(f"Published: {latest_video['publish_time'][:10]}")
+                                    if has_new:
+                                        st.success("🆕 New content detected!")
+                                else:
+                                    st.write("**No recent videos found**")
+                            
+                            with col3:
+                                # Channel actions
+                                if st.button(f"Check", key=f"check_{channel}"):
+                                    with st.spinner(f"Checking {channel}..."):
+                                        try:
+                                            check_response = requests.post(f"{backend_url}/api/channels/check/{channel}")
+                                            if check_response.status_code == 200:
+                                                result = check_response.json()
+                                                st.success("Check completed!")
+                                                st.rerun()
+                                            else:
+                                                st.error("Check failed")
+                                        except Exception as e:
+                                            st.error(f"Error: {str(e)}")
+                                
+                                if st.button(f"Remove", key=f"remove_{channel}"):
+                                    with st.spinner(f"Removing {channel}..."):
+                                        try:
+                                            remove_response = requests.delete(f"{backend_url}/api/channels/{channel}")
+                                            if remove_response.status_code == 200:
+                                                st.success(f"Removed {channel}")
+                                                st.rerun()
+                                            else:
+                                                st.error("Removal failed")
+                                        except Exception as e:
+                                            st.error(f"Error: {str(e)}")
+                            
+                            # Show error details if there's an error
+                            if status == "error" and "error" in channel_info:
+                                st.error(f"Error: {channel_info['error']}")
+                
+                else:
+                    st.info("No channels being tracked.")
+            else:
+                st.error("Failed to load channel status")
+        except Exception as e:
+            st.error(f"Error loading channel status: {str(e)}")
+        
+        st.divider()
+        
+        # Add new channel section
+        st.subheader("➕ Add New Channel")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_channel = st.text_input(
+                "Channel Handle:",
+                placeholder="@channelname",
+                help="Enter the YouTube channel handle starting with @"
+            )
+        with col2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("Add Channel", type="primary"):
+                if new_channel:
+                    if not new_channel.startswith("@"):
+                        st.error("Channel handle must start with @")
+                    else:
+                        with st.spinner(f"Adding {new_channel}..."):
+                            try:
+                                add_response = requests.post(f"{backend_url}/api/channels/add", json={"channel": new_channel})
+                                if add_response.status_code == 200:
+                                    result = add_response.json()
+                                    st.success(f"Added {new_channel}")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed to add channel: {add_response.text}")
+                            except Exception as e:
+                                st.error(f"Error adding channel: {str(e)}")
+                else:
+                    st.error("Please enter a channel handle")
+                    for channel in channels:
+                        col1, col2, col3 = st.columns([3, 2, 1])
+                        with col1:
+                            st.write(f"**{channel}**")
+                        with col2:
+                            if st.button(f"Check {channel}", key=f"check_{channel}"):
+                                with st.spinner(f"Checking {channel} for new videos..."):
+                                    try:
+                                        check_response = requests.post(f"{backend_url}/api/channels/check/{channel}")
+                                        if check_response.status_code == 200:
+                                            result = check_response.json()
+                                            st.success(f"Check completed: {result.get('message', 'Success')}")
+                                        else:
+                                            st.error(f"Failed to check channel: {check_response.text}")
+                                    except Exception as e:
+                                        st.error(f"Error checking channel: {str(e)}")
+
+    with tab4:
+        st.header("Testing")
+        st.info("Test different components of the application.")
+        
+        # Backend API endpoint
+        backend_url = get_backend_url()
+        
+        # Video processing test
+        st.subheader("Video Processing Test")
+        test_url = st.text_input("Test YouTube URL:", placeholder="https://www.youtube.com/watch?v=...", key="test_url")
+        
+        if st.button("Test Video Processing"):
+            if test_url:
+                with st.spinner("Testing video processing pipeline..."):
+                    try:
+                        response = requests.post(f"{backend_url}/api/test", json={"youtube_url": test_url})
+                        if response.status_code == 200:
+                            result = response.json()
+                            st.success("Pipeline test successful!")
+                            st.json(result)
+                        else:
+                            st.error(f"Pipeline test failed: {response.text}")
+                    except Exception as e:
+                        st.error(f"Error testing pipeline: {str(e)}")
+            else:
+                st.error("Please enter a YouTube URL")
+        
+        # Channel video fetching test
+        st.subheader("Channel Video Fetching Test")
+        test_channel = st.text_input("Test Channel Handle:", placeholder="@channelname", key="test_channel")
+        
+        if st.button("Test Channel Videos"):
+            if test_channel:
+                if not test_channel.startswith("@"):
+                    st.error("Channel handle must start with @")
+                else:
+                    with st.spinner(f"Fetching latest videos from {test_channel}..."):
+                        try:
+                            response = requests.post(f"{backend_url}/api/channels/check/{test_channel}")
+                            if response.status_code == 200:
+                                result = response.json()
+                                st.success("Channel check successful!")
+                                st.json(result)
+                            else:
+                                st.error(f"Channel check failed: {response.text}")
+                        except Exception as e:
+                            st.error(f"Error checking channel: {str(e)}")
+            else:
+                st.error("Please enter a channel handle")
+        
+        # Daily report test
+        st.subheader("Daily Report Test")
+        if st.button("Generate Daily Report"):
+            with st.spinner("Generating daily report..."):
+                try:
+                    # Get webhook token first
+                    token_response = requests.get(f"{backend_url}/api/webhook-token")
+                    if token_response.status_code == 200:
+                        token_data = token_response.json()
+                        token = token_data.get("token")
+                        
+                        # Trigger daily report
+                        headers = {"Authorization": f"Bearer {token}"}
+                        response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", headers=headers)
+                        if response.status_code == 200:
+                            result = response.json()
+                            st.success("Daily report generated successfully!")
+                            st.json(result)
+                        else:
+                            st.error(f"Daily report failed: {response.text}")
+                    else:
+                        st.error("Failed to get webhook token")
+                except Exception as e:
+                    st.error(f"Error generating daily report: {str(e)}")
+        
+        # Webhook testing
+        st.subheader("Webhook Testing")
         webhooks = config.get("webhooks", {})
         
-        st.subheader("Test Webhooks")
-        
-        # Create two columns for better layout
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("##### Transcript Webhook")
-            transcript_url = webhooks.get("yt_transcripts", "")
-            
-            if not transcript_url:
-                st.warning("No transcript webhook configured. Set it in the Configuration tab.")
-            else:
-                if st.button("Test Transcript Webhook"):
-                    with st.spinner("Testing transcript webhook..."):
-                        success, message = asyncio.run(test_webhook(transcript_url, "transcript"))
-                        if success:
-                            st.success(message)
-                        else:
-                            st.error(message)
-            
-            st.write("##### Summary Webhook")
-            summary_url = webhooks.get("yt_summaries", "")
-            
-            if not summary_url:
-                st.warning("No summary webhook configured. Set it in the Configuration tab.")
-            else:
+            st.write("**Summary Webhook**")
+            if webhooks.get("yt_summaries"):
                 if st.button("Test Summary Webhook"):
                     with st.spinner("Testing summary webhook..."):
-                        success, message = asyncio.run(test_webhook(summary_url, "summary"))
+                        success, message = asyncio.run(test_webhook(webhooks["yt_summaries"], "summary"))
                         if success:
                             st.success(message)
                         else:
                             st.error(message)
+            else:
+                st.warning("No summary webhook configured")
         
         with col2:
-            st.write("##### Daily Report Webhook")
-            daily_url = webhooks.get("daily_report", "")
-            
-            if not daily_url:
-                st.warning("No daily report webhook configured. Set it in the Configuration tab.")
-            else:
+            st.write("**Daily Report Webhook**")
+            if webhooks.get("daily_report"):
                 if st.button("Test Daily Report Webhook"):
                     with st.spinner("Testing daily report webhook..."):
-                        success, message = asyncio.run(test_webhook(daily_url, "daily_report"))
+                        success, message = asyncio.run(test_webhook(webhooks["daily_report"], "daily_report"))
                         if success:
                             st.success(message)
                         else:
                             st.error(message)
-            
-            st.write("##### YouTube Uploads Webhook")
-            uploads_url = webhooks.get("yt_uploads", "")
-            
-            if not uploads_url:
-                st.warning("No YouTube uploads webhook configured. Set it in the Configuration tab.")
             else:
-                if st.button("Test YouTube Uploads Webhook"):
-                    with st.spinner("Testing YouTube uploads webhook..."):
-                        success, message = asyncio.run(test_uploads_webhook(uploads_url))
-                        if success:
-                            st.success(message)
-                        else:
-                            st.error(message)
-        
-        # NotifyMe Integration
-        st.subheader("NotifyMe Bot Integration")
-        st.write("Process videos from NotifyMe Discord bot notifications")
-        
-        # Display example NotifyMe message
-        with st.expander("Example NotifyMe Message", expanded=False):
-            st.markdown("""
-            ```
-            NotifyMe APP 21/7/25, 2:51PM
-            Iman Gadzhi just posted a new video!
-            youtu.be/US47EpxBVHk
-            YouTube
-            Iman Gadzhi
-            Build A One-Person Business As A Beginner (From $0 To $10K)
-            ```
-            """)
-            
-            # Add image of NotifyMe message
-            st.write("When properly configured, the application will automatically detect and process videos from NotifyMe notifications.")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("Test NotifyMe Integration"):
-                with st.spinner("Processing sample NotifyMe notification... This may take some time."):
-                    success, message = asyncio.run(process_notifyme_message())
-                    if success:
-                        st.success(message)
-                    else:
-                        st.error(message)
-        
-        with col2:
-            # Sample video process button
-            if st.button("Process Sample Video"):
-                with st.spinner("Processing sample video... This may take some time."):
-                    success, message = asyncio.run(process_latest_video())
-                    if success:
-                        st.success(message)
-                    else:
-                        st.error(message)
-                        
-    with tab4:
-        st.header("Webhook Setup")
-        st.write("Configure Discord to forward NotifyMe messages to this application")
-        
-        # Get the current webhook token
-        webhook_token = get_webhook_token()
-        
-        st.info("""
-        ### How to Set Up Discord Webhook Forwarding
-        
-        To automatically process new videos from NotifyMe:
-        
-        1. Create a webhook in your Discord server settings
-        2. Set the webhook URL to point to your server: `http://your-server-address:8000/api/webhook/notifyme`
-        3. Include the authorization token in the webhook headers
-        4. Configure NotifyMe to post notifications to the channel with your webhook
-        
-        The webhook will receive NotifyMe notifications and trigger the processing pipeline automatically.
-        """)
-        
-        # Display webhook URL
-        st.subheader("Webhook Endpoint")
-        
-        # Get server address
-        server_address = st.text_input(
-            "Server Address:",
-            value="http://localhost:8000",
-            help="The address where this application is hosted. Use your public IP or domain name for production."
-        )
-        
-        st.code(f"{server_address}/api/webhook/notifyme")
-        
-        # Display authorization token
-        st.subheader("Authorization Token")
-        st.write("Include this token in the Authorization header of webhook requests.")
-        
-        if webhook_token:
-            # Show the token with a copy button
-            st.code(f"Bearer {webhook_token}")
-            
-            # Add regenerate button
-            if st.button("Regenerate Token"):
-                with st.spinner("Regenerating token..."):
-                    new_token = regenerate_webhook_token()
-                    if new_token:
-                        st.success("Token regenerated successfully!")
-                        st.code(f"Bearer {new_token}")
-                        webhook_token = new_token
-                    else:
-                        st.error("Failed to regenerate token.")
-        else:
-            st.warning("No webhook token found. Please restart the application to generate one.")
-        
-        # Instructions for setting up the webhook in Discord
-        st.subheader("Discord Webhook Setup")
-        st.markdown("""
-        1. Go to your Discord server settings
-        2. Select "Integrations" → "Webhooks"
-        3. Create a new webhook
-        4. Set the name to "NotifyMe Forwarder"
-        5. Select the channel where NotifyMe posts notifications
-        6. Copy the webhook URL and configure it with a service like [webhook.site](https://webhook.site) to forward to your endpoint
-        
-        ### Daily Report Timing
-        
-        The daily report will be automatically generated and sent at 18:00 CEST to the Daily Report webhook channel.
-        """)
-        
-        # Test the webhook endpoint
-        st.subheader("Test Webhook Endpoint")
-        if st.button("Test Webhook Endpoint"):
-            # Try to call the webhook endpoint with a test message
-            try:
-                headers = {"Authorization": f"Bearer {webhook_token}"}
-                payload = {
-                    "content": "NotifyMe APP 21/7/25, 2:51PM\nTest User just posted a new video!\nyoutu.be/dQw4w9WgXcQ\nYouTube\nTest User\nTest Video"
-                }
-                
-                with st.spinner("Testing webhook endpoint..."):
-                    response = requests.post(f"{server_address}/api/webhook/notifyme", json=payload, headers=headers)
-                    
-                    if response.status_code == 200:
-                        st.success("Webhook endpoint test successful!")
-                        st.json(response.json())
-                    else:
-                        st.error(f"Webhook endpoint test failed with status code {response.status_code}")
-                        st.text(response.text)
-            except Exception as e:
-                st.error(f"Error testing webhook endpoint: {str(e)}")
+                st.warning("No daily report webhook configured")
 
 if __name__ == "__main__":
     # If sample URL was set from troubleshooting section

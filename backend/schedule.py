@@ -1,11 +1,18 @@
 import os
 import json
 import asyncio
+import sys
+
+# Add project root to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from discord_utils import send_discord_message
-from summarize import generate_daily_report
+from shared.discord_utils import send_discord_message
+from shared.summarize import generate_daily_report
+from shared.youtube_tracker import check_tracked_channels
+import logging
 import pytz
 
 def setup_scheduler():

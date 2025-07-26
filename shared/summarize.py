@@ -5,7 +5,7 @@ import ssl
 import time
 import re
 import os
-from supabase_utils import get_config as get_supabase_config, get_summary as get_supabase_summary, save_summary as save_supabase_summary
+from .supabase_utils import get_config as get_supabase_config, get_summary as get_supabase_summary, save_summary as save_supabase_summary
 
 # Create a context that doesn't verify certificates (for development only)
 # In production, you should use proper certificates
@@ -55,18 +55,14 @@ FORMAT YOUR REPORT:
 The report will be shared in a Discord channel, so format it accordingly using markdown for structure."""
 
 def load_config():
-    """Load configuration from Supabase or fall back to local file"""
+    """Load configuration from Supabase"""
     try:
-        # First try to get config from Supabase
         supabase_config = get_supabase_config()
         if supabase_config:
             return supabase_config
-        
-        # If Supabase config not found, fall back to local file
-        with open("data/config.json", "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    except Exception:
+        pass
+    return {}
 
 def get_summary_prompt():
     """Get the summary prompt from config or use default"""
@@ -116,14 +112,7 @@ async def chunk_and_summarize(transcript, api_key, video_id=None):
         
         # Save to Supabase if video_id is provided and summary was generated
         if video_id and summary:
-            save_supabase_summary(
-                video_id, 
-                summary.get("summary", ""),
-                summary.get("title", ""),
-                summary.get("points", []),
-                summary.get("noteworthy_mentions", []),
-                summary.get("verdict", "")
-            )
+            save_supabase_summary(video_id, summary.get("summary", ""))
             
         return summary
     
@@ -271,14 +260,7 @@ async def chunk_and_summarize(transcript, api_key, video_id=None):
     if final_summary:
         # Save to Supabase if video_id is provided
         if video_id:
-            save_supabase_summary(
-                video_id, 
-                final_summary.get("summary", ""),
-                final_summary.get("title", ""),
-                final_summary.get("points", []),
-                final_summary.get("noteworthy_mentions", []),
-                final_summary.get("verdict", "")
-            )
+            save_supabase_summary(video_id, final_summary.get("summary", ""))
         return final_summary
     
     # If combination fails, create a summary from the individual chunks
@@ -305,14 +287,7 @@ async def chunk_and_summarize(transcript, api_key, video_id=None):
     
     # Save to Supabase if video_id is provided
     if video_id:
-        save_supabase_summary(
-            video_id, 
-            summary_result.get("summary", ""),
-            summary_result.get("title", ""),
-            summary_result.get("points", []),
-            summary_result.get("noteworthy_mentions", []),
-            summary_result.get("verdict", "")
-        )
+        save_supabase_summary(video_id, summary_result.get("summary", ""))
     
     return summary_result
 
@@ -497,20 +472,34 @@ async def generate_daily_report(summaries, api_key):
         print("No summaries provided for daily report")
         return "No new videos summarized today."
     
+    # Ensure summaries is a list
+    if summaries is None:
+        print("Summaries is None, returning default message")
+        return "No new videos summarized today."
+    
     if not api_key:
         print("OpenAI API key not provided for daily report")
         return "Unable to generate report: OpenAI API key not provided."
     
     # Create the input for the report
     print(f"Generating daily report for {len(summaries)} summaries")
+    print(f"Debug: summaries data = {summaries}")
     summaries_text = []
     for i, summary in enumerate(summaries, 1):
         title = summary.get("title", f"Video {i}")
-        points_text = "\n".join([f"- {point}" for point in summary.get("points", [])])
+        points = summary.get("points", [])
+        # Ensure points is iterable
+        if points is None:
+            points = []
+        points_text = "\n".join([f"- {point}" for point in points])
         summary_text = summary.get("summary", "No summary available")
         url = summary.get("url", "")
         verdict = summary.get("verdict", "")
-        noteworthy_mentions = ", ".join(summary.get("noteworthy_mentions", []))
+        noteworthy_mentions_list = summary.get("noteworthy_mentions", [])
+        # Ensure noteworthy_mentions is iterable
+        if noteworthy_mentions_list is None:
+            noteworthy_mentions_list = []
+        noteworthy_mentions = ", ".join(noteworthy_mentions_list)
         
         entry = f"Video: {title}\nURL: {url}\n"
         if verdict:
@@ -555,7 +544,7 @@ async def generate_daily_report(summaries, api_key):
         "create_daily_report"
     )
     
-    if report_data and "report" in report_data:
+    if report_data and isinstance(report_data, dict) and "report" in report_data:
         # Format the report for Discord with proper line breaks and formatting
         report = report_data["report"]
         

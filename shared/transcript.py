@@ -5,7 +5,7 @@ import ssl
 import os
 from youtube_transcript_api import YouTubeTranscriptApi, _errors
 from youtube_transcript_api.formatters import TextFormatter
-from supabase_utils import get_transcript as get_supabase_transcript, save_transcript as save_supabase_transcript
+from .supabase_utils import get_transcript as get_supabase_transcript, save_transcript as save_supabase_transcript
 
 # Create a context that doesn't verify certificates (for development only)
 # In production, you should use proper certificates

@@ -3,10 +3,13 @@ import json
 import time
 import asyncio
 import re
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from datetime import datetime
 
-from transcript import get_transcript, extract_video_id
-from summarize import chunk_and_summarize
+from shared.transcript import get_transcript, extract_video_id
+from shared.summarize import chunk_and_summarize
 from discord_utils import send_discord_message, send_file_to_discord
 
 def is_valid_youtube_url(url):

@@ -15,7 +15,7 @@ logger = logging.getLogger("youtube_tracker")
 
 # Import Supabase utilities
 try:
-    from supabase_utils import get_tracked_channels, save_tracked_channel, delete_tracked_channel, update_last_video
+    from .supabase_utils import get_tracked_channels, save_tracked_channel, delete_tracked_channel, update_last_video
     HAS_SUPABASE = True
 except (ImportError, Exception) as e:
     logger.warning(f"Supabase utils not available, using local storage: {e}")

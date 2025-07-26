@@ -52,4 +52,18 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER enforce_single_config
 BEFORE INSERT ON public.config
-FOR EACH ROW EXECUTE PROCEDURE prevent_multiple_configs(); 
+FOR EACH ROW EXECUTE PROCEDURE prevent_multiple_configs();
+
+-- Table for storing tracked YouTube channels
+CREATE TABLE public.tracked_channels (
+  id SERIAL PRIMARY KEY,
+  channel VARCHAR(255) NOT NULL UNIQUE,
+  last_video_id VARCHAR(20),
+  last_video_title VARCHAR(255),
+  last_video_published VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Index for faster lookup by channel
+CREATE INDEX idx_tracked_channels_channel ON public.tracked_channels(channel); 
