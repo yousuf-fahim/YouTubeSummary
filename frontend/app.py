@@ -8,6 +8,7 @@ import time
 import requests
 import ssl
 
+# YouTube Summary Bot - Railway Deployment v3.0
 # Add project root to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 

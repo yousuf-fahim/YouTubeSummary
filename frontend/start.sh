@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Railway Start Script for Frontend
-echo "🚀 Starting YouTube Summary Bot Frontend..."
+# Railway Start Script for Frontend v3.0
+echo "🚀 Starting YouTube Summary Bot Frontend (Railway v3.0)..."
+echo "📊 App.py line count: $(wc -l < app.py)"
 
 # Set default port if not provided
 export PORT=${PORT:-8501}
