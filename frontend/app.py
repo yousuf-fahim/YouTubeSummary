@@ -55,6 +55,32 @@ def get_backend_url():
     # Default to localhost for development
     return "http://localhost:8001"
 
+@st.cache_data(ttl=30)  # Cache for 30 seconds
+def check_service_status(backend_url):
+    """Check backend and scheduler status with caching"""
+    backend_status = "❌ Offline"
+    scheduler_status = "❌ Offline"
+    
+    try:
+        response = requests.get(f"{backend_url}/health", timeout=5)
+        if response.status_code == 200:
+            backend_status = "✅ Online"
+        else:
+            backend_status = "⚠️ Issues"
+    except:
+        backend_status = "❌ Offline"
+    
+    try:
+        scheduler_response = requests.get(f"{backend_url}/api/scheduler/status", timeout=5)
+        if scheduler_response.status_code == 200:
+            scheduler_status = "✅ Active"
+        else:
+            scheduler_status = "⚠️ Issues"
+    except:
+        scheduler_status = "❌ Offline"
+    
+    return backend_status, scheduler_status
+
 def sanitize_filename(title):
     """Convert video title to safe filename"""
     if not title:
@@ -145,7 +171,16 @@ except ImportError as e:
     def save_tracking_data(data):
         return True
 
-st.set_page_config(page_title="YouTube Summary", page_icon="📝", layout="wide")
+st.set_page_config(
+    page_title="YouTube Summary Bot", 
+    page_icon="🤖", 
+    layout="wide",
+    menu_items={
+        'Get Help': 'https://github.com/yousuf-fahim/YouTubeSummary',
+        'Report a bug': "https://github.com/yousuf-fahim/YouTubeSummary/issues",
+        'About': "AI-powered YouTube video summarization with Discord integration"
+    }
+)
 
 # Set up session state for caching
 if "transcripts" not in st.session_state:
@@ -511,7 +546,310 @@ def try_other_video_id_formats(original_id):
     return suggestions
 
 def main():
-    st.title("YouTube Summary Tool")
+    st.title("🤖 YouTube Summary Bot")
+    
+    # Check if environment is properly configured
+    backend_url = get_backend_url()
+    openai_key = os.getenv("OPENAI_API_KEY")
+    
+    # Status bar at the top with cached status checks
+    backend_status, scheduler_status = check_service_status(backend_url)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if openai_key:
+            st.success("🔑 OpenAI Configured")
+        else:
+            st.error("🔑 OpenAI Missing")
+    
+    with col2:
+        if "Online" in backend_status:
+            st.success(f"🔗 Backend {backend_status}")
+        elif "Issues" in backend_status:
+            st.warning(f"🔗 Backend {backend_status}")
+        else:
+            st.error(f"🔗 Backend {backend_status}")
+    
+    with col3:
+        if "Active" in scheduler_status:
+            st.success(f"⏰ Scheduler {scheduler_status}")
+        elif "Issues" in scheduler_status:
+            st.warning(f"⏰ Scheduler {scheduler_status}")
+        else:
+            st.error(f"⏰ Scheduler {scheduler_status}")
+    
+    with col4:
+        if st.button("⚙️ Settings"):
+            st.info("Settings moved to environment variables for security")
+    
+    # Main interface tabs
+    tab1, tab2, tab3 = st.tabs(["🎬 Video Processor", "📺 Channel Manager", "🧪 System Test"])
+    
+    with tab1:
+        st.header("Process YouTube Videos")
+        
+        # Quick stats
+        try:
+            stats_response = requests.get(f"{backend_url}/api/stats")
+            if stats_response.status_code == 200:
+                stats = stats_response.json()
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("📹 Videos Processed", stats.get("total_videos", 0))
+                with col2:
+                    st.metric("📝 Summaries Generated", stats.get("total_summaries", 0))
+                with col3:
+                    st.metric("📅 Daily Reports", stats.get("total_reports", 0))
+        except:
+            pass
+        
+        st.divider()
+        
+        # Input for YouTube URL
+        youtube_url = st.text_input(
+            "🔗 Enter YouTube URL:",
+            placeholder="https://www.youtube.com/watch?v=...",
+            key="youtube_url_main"
+        )
+        
+        # Process button and quick actions
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            process_button = st.button("🚀 Process Video", type="primary", disabled=not youtube_url)
+        with col2:
+            if st.button("📋 Sample Video"):
+                st.session_state.sample_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                st.rerun()
+        with col3:
+            if st.button("🗑️ Clear"):
+                st.session_state.youtube_url_main = ""
+                st.rerun()
+        
+        # Handle sample URL
+        if hasattr(st.session_state, 'sample_url'):
+            youtube_url = st.session_state.sample_url
+            del st.session_state.sample_url
+            st.rerun()
+        
+        if youtube_url and process_button:
+            if not is_valid_youtube_url(youtube_url):
+                st.error("❌ Invalid YouTube URL format")
+                if len(youtube_url) == 11 and re.match(r'^[A-Za-z0-9_-]{11}$', youtube_url):
+                    st.info(f"💡 Looks like a video ID. Try: https://www.youtube.com/watch?v={youtube_url}")
+            else:
+                if not openai_key:
+                    st.error("❌ OpenAI API key not configured. Please set the OPENAI_API_KEY environment variable.")
+                else:
+                    # Process the video
+                    with st.status("🔄 Processing video...", expanded=True) as status:
+                        video_id = extract_video_id(youtube_url)
+                        if video_id:
+                            st.write(f"📹 Video ID: `{video_id}`")
+                        
+                        st.write("📝 Retrieving transcript...")
+                        transcript = asyncio.run(get_cached_transcript(youtube_url))
+                        
+                        if transcript:
+                            st.write("✅ Transcript retrieved successfully!")
+                            
+                            st.write("🤖 Generating AI summary...")
+                            summary = asyncio.run(chunk_and_summarize(transcript, openai_key))
+                            
+                            if summary:
+                                st.write("✅ Summary generated successfully!")
+                                status.update(label="✅ Video processed successfully!", state="complete")
+                                
+                                # Display results
+                                st.success("🎉 Video processed successfully!")
+                                
+                                # Show summary in a nice format
+                                with st.container():
+                                    if summary.get("title"):
+                                        st.subheader(f"🎬 {summary['title']}")
+                                    
+                                    if summary.get("verdict"):
+                                        st.info(f"💭 **Verdict:** {summary['verdict']}")
+                                    
+                                    if summary.get("summary"):
+                                        if isinstance(summary["summary"], list):
+                                            st.markdown("### 📋 Key Points:")
+                                            for point in summary["summary"]:
+                                                st.markdown(f"• {point}")
+                                        else:
+                                            st.markdown("### 📄 Summary:")
+                                            st.markdown(summary["summary"])
+                                    
+                                    if summary.get("noteworthy_mentions"):
+                                        st.markdown("### 🎯 Noteworthy Mentions:")
+                                        for mention in summary["noteworthy_mentions"]:
+                                            st.markdown(f"• {mention}")
+                                
+                                # Show transcript in expander
+                                with st.expander("📜 View Full Transcript"):
+                                    st.text_area("Transcript", transcript, height=300, disabled=True)
+                                    
+                                # Auto-save
+                                if video_id:
+                                    os.makedirs("data/summaries", exist_ok=True)
+                                    os.makedirs("data/transcripts", exist_ok=True)
+                                    
+                                    with open(f"data/transcripts/{video_id}.txt", "w") as f:
+                                        f.write(transcript)
+                                    
+                                    with open(f"data/summaries/{video_id}.txt", "w") as f:
+                                        summary_text = json.dumps(summary, indent=2)
+                                        f.write(summary_text)
+                                    
+                                    st.success(f"💾 Results saved for video ID: `{video_id}`")
+                            else:
+                                st.error("❌ Failed to generate summary")
+                                status.update(label="❌ Summary generation failed", state="error")
+                        else:
+                            st.error("❌ Could not retrieve transcript")
+                            status.update(label="❌ Transcript retrieval failed", state="error")
+                            
+                            if st.session_state.transcript_error:
+                                st.warning(f"Details: {st.session_state.transcript_error}")
+                            
+                            with st.expander("💡 Troubleshooting Tips"):
+                                st.markdown("""
+                                **Common issues:**
+                                - Video has no captions/subtitles available
+                                - Video is private, unlisted, or age-restricted
+                                - Video is too new (captions not processed yet)
+                                - Regional restrictions
+                                
+                                **Try:**
+                                - Use a popular video with captions
+                                - Check if the CC button appears in YouTube player
+                                - Copy URL directly from YouTube
+                                """)
+
+    with tab2:
+        st.header("📺 Channel Management & Automation")
+        st.info("🚧 Channel management features coming soon!")
+        st.markdown("""
+        **Planned Features:**
+        - Add/remove YouTube channels for tracking
+        - Automatic daily reports at scheduled times
+        - View processing status and history
+        - Manual trigger for immediate processing
+        """)
+
+    with tab3:
+        st.header("🧪 System Testing & Diagnostics")
+        
+        # System status overview
+        st.subheader("🔍 System Status")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**📊 Environment Check**")
+            
+            # Check environment variables
+            env_checks = [
+                ("OPENAI_API_KEY", "🔑 OpenAI API Key"),
+                ("SUPABASE_URL", "🗄️ Supabase URL"),
+                ("SUPABASE_KEY", "🔐 Supabase Key"),
+                ("DISCORD_WEBHOOK_UPLOADS", "📤 Discord Uploads"),
+                ("DISCORD_WEBHOOK_SUMMARIES", "📋 Discord Summaries"),
+                ("DISCORD_WEBHOOK_DAILY_REPORT", "📅 Discord Reports")
+            ]
+            
+            for env_var, display_name in env_checks:
+                value = os.getenv(env_var)
+                if value:
+                    st.success(f"✅ {display_name}")
+                else:
+                    st.error(f"❌ {display_name}")
+        
+        with col2:
+            st.markdown("**🔗 Service Connectivity**")
+            
+            # Test backend connection
+            if "Online" in backend_status:
+                st.success("✅ Backend API")
+            else:
+                st.error("❌ Backend API")
+            
+            # Test OpenAI API
+            if st.button("🤖 Test OpenAI"):
+                openai_key = os.getenv("OPENAI_API_KEY")
+                if not openai_key:
+                    st.error("❌ OpenAI API key not found")
+                else:
+                    with st.spinner("Testing OpenAI API..."):
+                        try:
+                            # Simple test using requests
+                            headers = {"Authorization": f"Bearer {openai_key}"}
+                            response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+                            if response.status_code == 200:
+                                st.success("✅ OpenAI API connection successful")
+                            else:
+                                st.error(f"❌ OpenAI API error: {response.status_code}")
+                        except Exception as e:
+                            st.error(f"❌ OpenAI API test failed: {str(e)}")
+        
+        st.divider()
+        
+        # Testing tools
+        st.subheader("🔧 Testing Tools")
+        
+        # Video processing test
+        st.markdown("**📹 Video Processing Test**")
+        test_url = st.text_input(
+            "Test YouTube URL:",
+            placeholder="https://www.youtube.com/watch?v=...",
+            key="test_video_url"
+        )
+        
+        if st.button("🧪 Test Video Processing"):
+            if not test_url:
+                st.error("❌ Please enter a YouTube URL")
+            elif not is_valid_youtube_url(test_url):
+                st.error("❌ Invalid YouTube URL format")
+            else:
+                with st.spinner("🔄 Testing video processing..."):
+                    try:
+                        # Test transcript retrieval
+                        video_id = extract_video_id(test_url)
+                        if video_id:
+                            st.info(f"📹 Video ID: {video_id}")
+                        
+                        transcript = asyncio.run(get_cached_transcript(test_url))
+                        if transcript:
+                            st.success("✅ Transcript retrieval successful")
+                            st.info(f"📝 Transcript length: {len(transcript)} characters")
+                            
+                            # Test summarization if OpenAI key is available
+                            openai_key = os.getenv("OPENAI_API_KEY")
+                            if openai_key:
+                                st.info("🤖 Testing AI summarization...")
+                                summary = asyncio.run(chunk_and_summarize(transcript, openai_key))
+                                if summary:
+                                    st.success("✅ AI summarization successful")
+                                    st.json(summary)
+                                else:
+                                    st.error("❌ AI summarization failed")
+                            else:
+                                st.warning("⚠️ No OpenAI key for summarization test")
+                        else:
+                            st.error("❌ Transcript retrieval failed")
+                            if st.session_state.transcript_error:
+                                st.warning(f"Error: {st.session_state.transcript_error}")
+                    except Exception as e:
+                        st.error(f"❌ Test failed: {str(e)}")
+    
+    # Footer
+    st.divider()
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.caption("🤖 **YouTube Summary Bot v2.0**")
+    with col2:
+        st.caption("🔗 [GitHub Repository](https://github.com/yousuf-fahim/YouTubeSummary)")
+    with col3:
+        st.caption("📞 [Report Issues](https://github.com/yousuf-fahim/YouTubeSummary/issues)")
     
     # Load config
     config = load_config()
