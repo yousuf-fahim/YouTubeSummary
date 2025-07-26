@@ -21,34 +21,40 @@ if not hasattr(st, 'secrets') or os.getenv('STREAMLIT_SHARING', 'false').lower()
         pass  # dotenv not available in production, that's fine
 
 # Set environment variables from Streamlit secrets before importing shared modules
-if hasattr(st, 'secrets'):
-    # Set all secrets as environment variables for shared modules
-    for key, value in st.secrets.items():
-        if isinstance(value, str):
-            os.environ[key] = value
-    
-    # Also handle nested secrets
-    try:
-        if "general" in st.secrets:
-            for key, value in st.secrets["general"].items():
-                if isinstance(value, str):
-                    os.environ[key] = value
-    except:
-        pass
+try:
+    if hasattr(st, 'secrets') and st.secrets:
+        # Set all secrets as environment variables for shared modules
+        for key, value in st.secrets.items():
+            if isinstance(value, str):
+                os.environ[key] = value
+        
+        # Also handle nested secrets
+        try:
+            if "general" in st.secrets:
+                for key, value in st.secrets["general"].items():
+                    if isinstance(value, str):
+                        os.environ[key] = value
+        except:
+            pass
+except:
+    # No secrets available - this is fine for Railway deployment with env vars
+    pass
 
 def get_backend_url():
     """Get backend URL from environment or secrets"""
-    # Try Streamlit secrets first (for production)
+    # Try Streamlit secrets first (for Streamlit Cloud)
     try:
-        # Try direct access first
-        if hasattr(st, 'secrets') and "BACKEND_URL" in st.secrets:
-            return st.secrets["BACKEND_URL"]
-        # Try nested access
-        return st.secrets["general"]["backend_url"]
+        if hasattr(st, 'secrets') and st.secrets:
+            # Try direct access first
+            if "BACKEND_URL" in st.secrets:
+                return st.secrets["BACKEND_URL"]
+            # Try nested access
+            if "general" in st.secrets and "backend_url" in st.secrets["general"]:
+                return st.secrets["general"]["backend_url"]
     except:
         pass
     
-    # Try environment variable
+    # Try environment variable (for Railway/other platforms)
     backend_url = os.getenv("BACKEND_URL")
     if backend_url:
         return backend_url
