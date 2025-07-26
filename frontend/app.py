@@ -90,6 +90,45 @@ except ImportError as e:
     # Default prompts
     DEFAULT_SUMMARY_PROMPT = "Summarize this video transcript"
     DEFAULT_DAILY_REPORT_PROMPT = "Create a daily report"
+    
+    # Additional fallback functions
+    def get_supabase_config():
+        return None
+        
+    def save_supabase_config(config):
+        return False
+        
+    def get_supabase_transcript(video_id):
+        return None
+        
+    def get_supabase_summary(video_id):
+        return None
+        
+    async def send_discord_message(webhook_url, content):
+        backend_url = get_backend_url()
+        response = requests.post(f"{backend_url}/api/discord/send", 
+                               json={"webhook_url": webhook_url, "content": content})
+        return response.json() if response.status_code == 200 else None
+        
+    class DiscordListener:
+        def __init__(self):
+            pass
+        def check_new_videos(self):
+            return []
+        def get_channel_info(self, channel_id):
+            return None
+            
+    def get_latest_videos_from_channel(channel_id, max_results=5):
+        backend_url = get_backend_url()
+        response = requests.get(f"{backend_url}/api/youtube/channel/{channel_id}/videos", 
+                              params={"max_results": max_results})
+        return response.json() if response.status_code == 200 else []
+        
+    def load_tracking_data():
+        return {"channels": []}
+        
+    def save_tracking_data(data):
+        return True
 
 st.set_page_config(page_title="YouTube Summary", page_icon="📝", layout="wide")
 
@@ -103,77 +142,67 @@ if "transcript_error" not in st.session_state:
 
 def load_config():
     """Load configuration from Supabase or config.json"""
-    # Try to get config from Supabase first
-    supabase_config = get_supabase_config()
-    if supabase_config:
-        # Ensure config has all required fields
-        if "prompts" not in supabase_config:
-            supabase_config["prompts"] = {
-                "summary_prompt": DEFAULT_SUMMARY_PROMPT,
-                "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
-            }
-        if "webhook_auth_token" not in supabase_config:
-            supabase_config["webhook_auth_token"] = ""
-        return supabase_config
-    
-    # Fall back to local file if Supabase config not available
-    config_path = os.path.join(os.path.dirname(__file__), "..", "shared", "data", "config.json")
-    
-    if not os.path.exists(config_path):
-        return {
-            "openai_api_key": "",
-            "webhooks": {
-                "yt_uploads": "",
-                "yt_transcripts": "",
-                "yt_summaries": "",
-                "daily_report": ""
-            },
-            "prompts": {
-                "summary_prompt": DEFAULT_SUMMARY_PROMPT,
-                "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
-            },
-            "webhook_auth_token": ""
-        }
-    
-    with open(config_path, "r") as f:
+    # Try to get config from Supabase first if modules are available
+    if SHARED_MODULES_AVAILABLE:
         try:
-            config = json.load(f)
-            # Make sure prompts section exists
-            if "prompts" not in config:
-                config["prompts"] = {
-                    "summary_prompt": DEFAULT_SUMMARY_PROMPT,
-                    "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
-                }
-            # Make sure webhook_auth_token exists
-            if "webhook_auth_token" not in config:
-                config["webhook_auth_token"] = ""
-            return config
-        except json.JSONDecodeError:
-            return {
-                "openai_api_key": "",
-                "webhooks": {
-                    "yt_uploads": "",
-                    "yt_transcripts": "",
-                    "yt_summaries": "",
-                    "daily_report": ""
-                },
-                "prompts": {
-                    "summary_prompt": DEFAULT_SUMMARY_PROMPT,
-                    "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
-                },
-                "webhook_auth_token": ""
-            }
+            supabase_config = get_supabase_config()
+            if supabase_config:
+                # Ensure config has all required fields
+                if "prompts" not in supabase_config:
+                    supabase_config["prompts"] = {
+                        "summary_prompt": DEFAULT_SUMMARY_PROMPT,
+                        "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
+                    }
+                if "webhook_auth_token" not in supabase_config:
+                    supabase_config["webhook_auth_token"] = ""
+                return supabase_config
+        except Exception as e:
+            st.warning(f"Could not load config from Supabase: {e}")
+    
+    # Fall back to API call or default config
+    backend_url = get_backend_url()
+    try:
+        response = requests.get(f"{backend_url}/api/config")
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        st.warning(f"Could not load config from backend: {e}")
+    
+    # Return default config if all else fails
+    return {
+        "openai_api_key": "",
+        "webhooks": {
+            "yt_uploads": "",
+            "yt_transcripts": "",
+            "yt_summaries": "",
+            "daily_report": ""
+        },
+        "prompts": {
+            "summary_prompt": DEFAULT_SUMMARY_PROMPT,
+            "daily_report_prompt": DEFAULT_DAILY_REPORT_PROMPT
+        },
+        "webhook_auth_token": ""
+    }
 
 def save_config(config):
     """Save configuration to Supabase and local config.json"""
-    # Save to Supabase
-    save_supabase_config(config)
+    # Save to Supabase if modules are available
+    if SHARED_MODULES_AVAILABLE:
+        try:
+            save_supabase_config(config)
+        except Exception as e:
+            st.warning(f"Could not save config to Supabase: {e}")
     
-    # Also save locally as backup
-    os.makedirs("data", exist_ok=True)
-    config_path = os.path.join("data", "config.json")
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    # Try to save via API as backup
+    backend_url = get_backend_url()
+    try:
+        response = requests.post(f"{backend_url}/api/config", json=config)
+        if response.status_code == 200:
+            st.success("Configuration saved successfully!")
+        else:
+            st.warning("Configuration save may have failed.")
+    except Exception as e:
+        st.warning(f"Could not save config via API: {e}")
 
 def is_valid_youtube_url(url):
     """Check if URL is a valid YouTube URL"""
