@@ -1,0 +1,22 @@
+# Railway Environment Variables Template
+# Copy these to your Railway service environment variables
+
+# OpenAI Configuration
+OPENAI_API_KEY=sk-your-openai-api-key-here
+
+# Supabase Configuration (Optional)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-supabase-anon-key
+
+# Backend API URL (if using backend service)
+BACKEND_URL=https://your-backend-railway-domain.railway.app
+
+# Discord Webhooks (Optional)
+DISCORD_WEBHOOK_UPLOADS=https://discord.com/api/webhooks/...
+DISCORD_WEBHOOK_TRANSCRIPTS=https://discord.com/api/webhooks/...
+DISCORD_WEBHOOK_SUMMARIES=https://discord.com/api/webhooks/...
+DISCORD_WEBHOOK_DAILY_REPORT=https://discord.com/api/webhooks/...
+
+# Production Settings
+STREAMLIT_SHARING=true
+NODE_ENV=production
