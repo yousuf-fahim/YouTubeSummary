@@ -7,6 +7,7 @@ A clean, focused FastAPI server for YouTube video processing
 import os
 import sys
 import asyncio
+import re
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -126,15 +127,25 @@ def stop_scheduler():
 async def process_video_internal(video_url_or_id: str) -> dict:
     """Internal function to process a video (used by scheduler and API)"""
     try:
-        # Extract video ID if full URL provided
-        video_id = extract_video_id(video_url_or_id)
-        if not video_id:
-            return {"success": False, "error": "Invalid YouTube URL or ID"}
+        # Extract video ID if full URL provided, or use as-is if already an ID
+        if "youtube.com" in video_url_or_id or "youtu.be" in video_url_or_id:
+            video_id = extract_video_id(video_url_or_id)
+            if not video_id:
+                return {"success": False, "error": "Invalid YouTube URL"}
+        else:
+            # Assume it's already a video ID
+            video_id = video_url_or_id
+            # Validate it looks like a YouTube video ID (11 characters, alphanumeric + _ -)
+            if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+                return {"success": False, "error": "Invalid YouTube video ID format"}
         
         logger.info(f"🎬 Processing video: {video_id}")
         
+        # Construct full URL for transcript extraction
+        full_video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
         # Get transcript
-        transcript_result = await get_transcript(video_id)
+        transcript_result = await get_transcript(full_video_url)
         
         # Handle different return types from get_transcript
         if transcript_result is None:
@@ -151,11 +162,26 @@ async def process_video_internal(video_url_or_id: str) -> dict:
             return {"success": False, "error": "Empty transcript received"}
         
         # Generate summary
-        summary_result = await chunk_and_summarize(transcript_text)
-        if not summary_result.get("success"):
-            return {"success": False, "error": f"Failed to generate summary: {summary_result.get('error')}"}
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            return {"success": False, "error": "OpenAI API key not configured"}
         
-        summary_text = summary_result.get("summary", "")
+        summary_result = await chunk_and_summarize(transcript_text, openai_api_key, video_id)
+        
+        # Handle different return formats from chunk_and_summarize
+        if summary_result is None:
+            return {"success": False, "error": "Failed to generate summary - function returned None"}
+        elif isinstance(summary_result, dict):
+            if "success" in summary_result and not summary_result.get("success"):
+                return {"success": False, "error": f"Failed to generate summary: {summary_result.get('error')}"}
+            # Extract summary text from the response
+            summary_text = summary_result.get("summary", "") or summary_result.get("summary_text", "")
+        else:
+            # If it's a string (old format)
+            summary_text = str(summary_result)
+        
+        if not summary_text:
+            return {"success": False, "error": "Empty summary received"}
         
         # Send to Discord if webhooks are configured
         try:
