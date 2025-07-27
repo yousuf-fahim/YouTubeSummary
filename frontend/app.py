@@ -46,7 +46,7 @@ def get_backend_url():
     if backend_url:
         return backend_url
     
-    # Default to working Heroku backend
+    # Default to working Heroku backend with automation
     return "https://yt-bot-backend-8302f5ba3275.herokuapp.com"
 
 def extract_video_id(url):
@@ -230,7 +230,7 @@ def main():
             st.caption("Channel tracking: Every 30 min")
     
     # Create tabs for different functions
-    tab1, tab2, tab3, tab4 = st.tabs(["📹 Process Video", "📋 Channel Tracking", "⚙️ Configuration", "📊 Reports"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📹 Process Video", "📋 Channel Tracking", "🤖 Automation", "⚙️ Configuration", "📊 Reports"])
     
     # Tab 1: Process Individual Video
     with tab1:
@@ -407,8 +407,116 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error adding channel: {e}")
     
-    # Tab 3: Configuration
+    # Tab 3: Automation Monitoring  
     with tab3:
+        st.header("🤖 Automation Monitoring")
+        
+        st.info("🚀 **Your YouTube Summary Bot is now fully automated!** It monitors all tracked channels every 30 minutes and processes new videos automatically.")
+        
+        # Get automation status
+        try:
+            backend_url = get_backend_url()
+            if backend_url:
+                response = requests.get(f"{backend_url}/api/monitor/status", timeout=10)
+                if response.status_code == 200:
+                    status_data = response.json()
+                    
+                    if status_data.get("success"):
+                        monitoring = status_data.get("monitoring", {})
+                        
+                        # Display status in columns
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("📺 Channels Monitored", monitoring.get("channels_tracked", 0))
+                        
+                        with col2:
+                            scheduler_running = monitoring.get("scheduler_running", False)
+                            status_color = "🟢" if scheduler_running else "🔴"
+                            st.metric("🤖 Automation Status", f"{status_color} {'Running' if scheduler_running else 'Stopped'}")
+                        
+                        with col3:
+                            next_check = monitoring.get("next_check")
+                            if next_check:
+                                next_time = next_check.split("T")[1][:8] if "T" in next_check else next_check
+                                st.metric("⏰ Next Check", next_time)
+                            else:
+                                st.metric("⏰ Next Check", "Not scheduled")
+                        
+                        # Control buttons
+                        st.subheader("🎛️ Automation Controls")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if st.button("▶️ Start Automation", help="Start automated channel monitoring"):
+                                try:
+                                    start_response = requests.post(f"{backend_url}/api/monitor/start", timeout=10)
+                                    if start_response.status_code == 200:
+                                        st.success("✅ Automation started!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Failed to start automation")
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                        
+                        with col2:
+                            if st.button("⏹️ Stop Automation", help="Stop automated channel monitoring"):
+                                try:
+                                    stop_response = requests.post(f"{backend_url}/api/monitor/stop", timeout=10)
+                                    if stop_response.status_code == 200:
+                                        st.success("✅ Automation stopped!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Failed to stop automation")
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                        
+                        with col3:
+                            if st.button("🔄 Check Now", help="Manually trigger channel checking"):
+                                try:
+                                    with st.spinner("Checking channels..."):
+                                        check_response = requests.post(f"{backend_url}/api/monitor/check-now", timeout=60)
+                                        if check_response.status_code == 200:
+                                            st.success("✅ Manual check completed!")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Manual check failed")
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                        
+                        # Show tracked channels
+                        st.subheader("📋 Monitored Channels")
+                        channels = monitoring.get("channels", [])
+                        if channels:
+                            for i, channel in enumerate(channels, 1):
+                                st.text(f"{i}. {channel}")
+                        else:
+                            st.info("No channels being monitored")
+                        
+                        # Automation info
+                        st.subheader("ℹ️ How It Works")
+                        st.markdown("""
+                        **Your bot automatically:**
+                        - 🕐 Checks all tracked channels every 30 minutes
+                        - 📡 Fetches latest videos via YouTube RSS feeds  
+                        - 📝 Extracts transcripts and generates AI summaries
+                        - 📤 Sends Discord notifications with summaries
+                        - 💾 Saves everything to your database
+                        
+                        **No manual intervention required!** Just sit back and receive automated video summaries.
+                        """)
+                    else:
+                        st.error("❌ Failed to get automation status")
+                else:
+                    st.error(f"❌ Backend error: {response.status_code}")
+            else:
+                st.error("❌ Backend URL not configured")
+        except Exception as e:
+            st.error(f"❌ Error connecting to backend: {e}")
+    
+    # Tab 4: Configuration
+    with tab4:
         st.header("Configuration")
         
         st.info("🔒 **Security Notice**: Configuration is now handled via environment variables for better security.")
@@ -455,8 +563,8 @@ def main():
                     else:
                         st.error(f"❌ {test_result.get('error', 'Test failed')}")
     
-    # Tab 4: Reports & Analytics
-    with tab4:
+    # Tab 5: Reports & Analytics
+    with tab5:
         st.header("Reports & Analytics")
         
         # Get recent summaries
