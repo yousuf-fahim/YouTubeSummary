@@ -134,11 +134,19 @@ async def process_video_internal(video_url_or_id: str) -> dict:
         logger.info(f"🎬 Processing video: {video_id}")
         
         # Get transcript
-        transcript_result = get_transcript(video_id)
-        if not transcript_result.get("success"):
-            return {"success": False, "error": f"Failed to get transcript: {transcript_result.get('error')}"}
+        transcript_result = await get_transcript(video_id)
         
-        transcript_text = transcript_result.get("transcript", "")
+        # Handle different return types from get_transcript
+        if transcript_result is None:
+            return {"success": False, "error": "Failed to get transcript - function returned None"}
+        elif isinstance(transcript_result, dict):
+            if not transcript_result.get("success"):
+                return {"success": False, "error": f"Failed to get transcript: {transcript_result.get('error')}"}
+            transcript_text = transcript_result.get("transcript", "")
+        else:
+            # If it's a string (old format)
+            transcript_text = transcript_result
+        
         if not transcript_text:
             return {"success": False, "error": "Empty transcript received"}
         
@@ -151,12 +159,18 @@ async def process_video_internal(video_url_or_id: str) -> dict:
         
         # Send to Discord if webhooks are configured
         try:
-            # Send summary to Discord (you can customize this)
-            discord_result = await send_discord_message(
-                summary_text,
-                webhook_type="summaries"
-            )
-            logger.info(f"📤 Sent summary to Discord: {discord_result.get('success', False)}")
+            # Get Discord webhook URL from environment
+            webhook_url = os.getenv("DISCORD_SUMMARIES_WEBHOOK")
+            if webhook_url:
+                discord_result = await send_discord_message(
+                    webhook_url=webhook_url,
+                    title="🤖 New Video Processed Automatically!",
+                    description=f"**Video:** https://www.youtube.com/watch?v={video_id}\n\n**Summary:**\n{summary_text[:1500]}{'...' if len(summary_text) > 1500 else ''}",
+                    color=0x00ff00  # Green color for success
+                )
+                logger.info(f"📤 Sent summary to Discord: {discord_result}")
+            else:
+                logger.info("📤 No Discord webhook configured, skipping notification")
         except Exception as e:
             logger.warning(f"⚠️ Discord notification failed: {str(e)}")
         
