@@ -227,27 +227,20 @@ def _get_transcript_from_api(video_id):
         str: The transcript text or None if not found
     """
     try:
-        # Get transcript data (list of dictionaries)
-        transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+        # Get transcript data using new API
+        api = YouTubeTranscriptApi()
+        fetched_transcript = api.fetch(video_id, languages=['en', 'en-US'])
         
-        # Simple approach: extract text from each segment
-        if not transcript_data or not isinstance(transcript_data, list):
-            raise ValueError("Invalid transcript data format")
-        
-        # Extract text directly
+        # Extract text from snippets
         transcript_parts = []
-        for segment in transcript_data:
-            if isinstance(segment, dict) and 'text' in segment:
-                text = segment['text'].strip()
-                if text:
-                    transcript_parts.append(text)
-            elif hasattr(segment, 'text'):
-                text = str(segment.text).strip()
+        for snippet in fetched_transcript.snippets:
+            if hasattr(snippet, 'text') and snippet.text:
+                text = snippet.text.strip()
                 if text:
                     transcript_parts.append(text)
         
         if not transcript_parts:
-            raise ValueError("No text found in transcript segments")
+            raise ValueError("No text found in transcript snippets")
         
         # Join all parts with spaces
         full_transcript = ' '.join(transcript_parts)

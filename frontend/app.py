@@ -14,7 +14,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 # Try to load environment variables from .env in development
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Load from parent directory where .env file is located
+    env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+    load_dotenv(env_path)
+    print(f"Loaded .env from: {env_path}")
 except ImportError:
     pass
 

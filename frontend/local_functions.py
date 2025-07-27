@@ -11,6 +11,14 @@ import asyncio
 import sys
 from datetime import datetime
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+    load_dotenv(env_path)
+except ImportError:
+    pass
+
 # Add project root to path for shared modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -55,10 +63,8 @@ def simple_transcript_extraction(video_id):
     except Exception as e:
         return f"Could not extract transcript: {str(e)}"
 
-def simple_summarization(transcript, title="Unknown Video"):
-    """Simple summarization fallback when OpenAI isn't available"""
-    if not transcript or len(transcript) < 100:
-        return "No transcript available for summarization"
+def simple_summarization(transcript, title):
+    """Generate summary using OpenAI API with proper response handling"""
     
     # Try to use the real summarization function if API key is available
     openai_key = os.getenv('OPENAI_API_KEY')
@@ -69,11 +75,31 @@ def simple_summarization(transcript, title="Unknown Video"):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                summary = loop.run_until_complete(generate_summary(transcript, openai_key))
-                return summary if summary else fallback_summary(transcript, title)
+                summary_result = loop.run_until_complete(generate_summary(transcript, openai_key))
+                if isinstance(summary_result, dict):
+                    # Format the dictionary result into a readable summary
+                    formatted_summary = f"""**{summary_result.get('title', title)}**
+
+**Summary:**
+{summary_result.get('summary', '')}
+
+**Key Points:**
+{chr(10).join(['• ' + point for point in summary_result.get('points', [])])}
+
+**Verdict:**
+{summary_result.get('verdict', '')}
+
+**Noteworthy Mentions:**
+{chr(10).join(['• ' + mention for mention in summary_result.get('noteworthy_mentions', [])]) if summary_result.get('noteworthy_mentions') else 'None'}"""
+                    return formatted_summary
+                elif isinstance(summary_result, str):
+                    return summary_result
+                else:
+                    return fallback_summary(transcript, title)
             finally:
                 loop.close()
         except Exception as e:
+            print(f"Summarization error: {e}")
             return fallback_summary(transcript, title)
     else:
         return fallback_summary(transcript, title)
@@ -121,14 +147,17 @@ def test_video_processing(youtube_url):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(send_discord_message(
+                    # Truncate summary for Discord (max 2000 chars)
+                    discord_content = f"📹 **{title}**\n\n{summary[:1800]}..."
+                    success = loop.run_until_complete(send_discord_message(
                         webhook_url,
-                        f"📹 **{title}**\n\n{summary[:1000]}..."
+                        discord_content
                     ))
-                    discord_sent = True
+                    discord_sent = bool(success)
                 finally:
                     loop.close()
-            except:
+            except Exception as e:
+                print(f"Discord send error: {e}")
                 pass
         
         return {
