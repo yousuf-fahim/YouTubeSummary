@@ -253,8 +253,48 @@ def main():
     with tab2:
         st.header("Channel Tracking")
         
-        # Get current tracked channels
-        channels_data, error = call_backend_api("/api/channels")
+        # Initialize session state for channels
+        if 'channels_data' not in st.session_state:
+            st.session_state.channels_data = None
+            st.session_state.last_refresh = None
+        
+        # Add refresh button and auto-refresh logic
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.subheader("📺 Tracked Channels")
+        with col2:
+            refresh_btn = st.button("🔄 Refresh", help="Refresh channel data")
+        with col3:
+            auto_refresh = st.checkbox("Auto-refresh", value=False)
+        
+        # Load channels data (with caching)
+        if (st.session_state.channels_data is None or 
+            refresh_btn or 
+            (auto_refresh and st.session_state.last_refresh is None)):
+            
+            with st.spinner("Loading channels..."):
+                # Try backend first, fallback to local
+                channels_data, error = call_backend_api("/api/channels")
+                
+                if error:
+                    # Fallback to local function
+                    try:
+                        from local_functions import get_local_channels
+                        local_result = get_local_channels()
+                        if local_result.get("status") == "success":
+                            channels_data = {
+                                "channels": local_result.get("channels", []),
+                                "last_videos": local_result.get("last_videos", {})
+                            }
+                            error = None
+                    except Exception as e:
+                        error = f"Backend and local both failed: {e}"
+                
+                st.session_state.channels_data = channels_data
+                st.session_state.last_refresh = time.time()
+        else:
+            channels_data = st.session_state.channels_data
+            error = None
         
         if error:
             st.error(f"❌ Cannot load channels: {error}")
@@ -262,39 +302,42 @@ def main():
             channels = channels_data.get("channels", []) if channels_data else []
             last_videos = channels_data.get("last_videos", {}) if channels_data else {}
             
-            st.subheader(f"📺 Tracked Channels ({len(channels)})")
+            st.write(f"**{len(channels)} channels tracked**")
             
-            # Display channels
+            # Display channels in a more efficient way
             if channels:
-                for channel in channels:
-                    col1, col2, col3 = st.columns([3, 2, 1])
-                    with col1:
-                        st.write(f"**{channel}**")
-                        # Show last video info if available
-                        if channel in last_videos:
-                            last_video = last_videos[channel]
-                            st.write(f"🎥 Last: {last_video.get('title', 'Unknown')}")
-                    with col2:
-                        if channel in last_videos:
-                            st.write(f"📅 {last_videos[channel].get('published', 'Unknown')}")
-                        else:
-                            st.write("No recent videos")
-                    with col3:
-                        if st.button("🗑️", key=f"remove_{channel}", help="Remove channel"):
-                            # Remove channel using DELETE endpoint
-                            remove_result, remove_error = call_backend_api(f"/api/channels/{channel}", "DELETE")
-                            if remove_error:
-                                st.error(f"❌ Removal failed: {remove_error}")
+                for i, channel in enumerate(channels):
+                    with st.container():
+                        col1, col2, col3 = st.columns([4, 3, 1])
+                        with col1:
+                            st.write(f"**{channel}**")
+                        with col2:
+                            if channel in last_videos and last_videos[channel].get('title'):
+                                st.caption(f"🎥 {last_videos[channel]['title'][:50]}...")
                             else:
-                                st.success("✅ Channel removed")
-                                st.rerun()
+                                st.caption("📭 No recent videos")
+                        with col3:
+                            if st.button("🗑️", key=f"remove_{i}", help="Remove channel"):
+                                # Remove channel
+                                try:
+                                    from local_functions import remove_local_channel
+                                    remove_result = remove_local_channel(channel)
+                                    if remove_result.get("status") == "success":
+                                        st.success("✅ Channel removed")
+                                        # Clear cache to force refresh
+                                        st.session_state.channels_data = None
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Removal failed")
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
             else:
-                st.info("No channels currently tracked")
+                st.info("📭 No channels currently tracked")
             
             # Add new channel
             st.subheader("➕ Add New Channel")
             
-            col1, col2 = st.columns([3, 1])
+            col1, col2 = st.columns([4, 1])
             with col1:
                 new_channel = st.text_input(
                     "Channel URL or ID:",
@@ -307,19 +350,19 @@ def main():
             
             if add_btn and new_channel:
                 with st.spinner("Adding channel..."):
-                    add_result, add_error = call_backend_api("/api/channels/add", "POST", {
-                        "channel_input": new_channel,
-                        "channel_name": ""  # Backend will auto-detect
-                    })
-                    
-                    if add_error:
-                        st.error(f"❌ Addition failed: {add_error}")
-                    else:
-                        if add_result.get("success"):
+                    try:
+                        from local_functions import add_local_channel
+                        add_result = add_local_channel(new_channel)
+                        
+                        if add_result.get("status") == "success":
                             st.success("✅ Channel added successfully!")
+                            # Clear cache to force refresh
+                            st.session_state.channels_data = None
                             st.rerun()
                         else:
-                            st.error(f"❌ {add_result.get('error', 'Unknown error')}")
+                            st.error(f"❌ Addition failed: {add_result.get('message', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"❌ Error adding channel: {e}")
     
     # Tab 3: Configuration
     with tab3:
