@@ -234,14 +234,37 @@ def _get_transcript_from_api(video_id):
         if not transcript_data or not isinstance(transcript_data, list):
             raise ValueError("Invalid transcript data format")
         
-        # Check if segments have the expected structure
-        for segment in transcript_data[:3]:  # Check first 3 segments
-            if not isinstance(segment, dict) or 'text' not in segment:
-                raise ValueError(f"Invalid segment format: {segment}")
+        # Check if segments have the expected structure and fix any issues
+        valid_segments = []
+        for segment in transcript_data:
+            if isinstance(segment, dict):
+                # Handle different possible formats
+                text = segment.get('text', '')
+                if not text and 'content' in segment:
+                    text = segment['content']
+                if not text and hasattr(segment, 'text'):
+                    text = getattr(segment, 'text', '')
+                
+                if text and isinstance(text, str):
+                    valid_segments.append({
+                        'text': text,
+                        'start': segment.get('start', 0),
+                        'duration': segment.get('duration', 0)
+                    })
+            elif hasattr(segment, 'text'):
+                # Handle object format
+                valid_segments.append({
+                    'text': getattr(segment, 'text', ''),
+                    'start': getattr(segment, 'start', 0),
+                    'duration': getattr(segment, 'duration', 0)
+                })
+        
+        if not valid_segments:
+            raise ValueError("No valid transcript segments found")
         
         # Use TextFormatter to format the transcript
         formatter = TextFormatter()
-        formatted_text = formatter.format_transcript(transcript_data)
+        formatted_text = formatter.format_transcript(valid_segments)
         
         if formatted_text and len(formatted_text.strip()) > 0:
             return formatted_text
