@@ -230,47 +230,33 @@ def _get_transcript_from_api(video_id):
         # Get transcript data (list of dictionaries)
         transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
         
-        # Verify the transcript data is in expected format
+        # Simple approach: extract text from each segment
         if not transcript_data or not isinstance(transcript_data, list):
             raise ValueError("Invalid transcript data format")
         
-        # Check if segments have the expected structure and fix any issues
-        valid_segments = []
+        # Extract text directly
+        transcript_parts = []
         for segment in transcript_data:
-            if isinstance(segment, dict):
-                # Handle different possible formats
-                text = segment.get('text', '')
-                if not text and 'content' in segment:
-                    text = segment['content']
-                if not text and hasattr(segment, 'text'):
-                    text = getattr(segment, 'text', '')
-                
-                if text and isinstance(text, str):
-                    valid_segments.append({
-                        'text': text,
-                        'start': segment.get('start', 0),
-                        'duration': segment.get('duration', 0)
-                    })
+            if isinstance(segment, dict) and 'text' in segment:
+                text = segment['text'].strip()
+                if text:
+                    transcript_parts.append(text)
             elif hasattr(segment, 'text'):
-                # Handle object format
-                valid_segments.append({
-                    'text': getattr(segment, 'text', ''),
-                    'start': getattr(segment, 'start', 0),
-                    'duration': getattr(segment, 'duration', 0)
-                })
+                text = str(segment.text).strip()
+                if text:
+                    transcript_parts.append(text)
         
-        if not valid_segments:
-            raise ValueError("No valid transcript segments found")
+        if not transcript_parts:
+            raise ValueError("No text found in transcript segments")
         
-        # Use TextFormatter to format the transcript
-        formatter = TextFormatter()
-        formatted_text = formatter.format_transcript(valid_segments)
+        # Join all parts with spaces
+        full_transcript = ' '.join(transcript_parts)
         
-        if formatted_text and len(formatted_text.strip()) > 0:
-            return formatted_text
+        if len(full_transcript.strip()) > 0:
+            return full_transcript
         else:
-            raise ValueError("Empty transcript after formatting")
+            raise ValueError("Empty transcript after processing")
             
     except Exception as e:
         print(f"YouTube API transcript error: {e}")
-        raise 
+        raise

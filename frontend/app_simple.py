@@ -38,13 +38,13 @@ st.set_page_config(
 
 def get_backend_url():
     """Get backend URL from environment"""
-    # Railway deployment or explicit backend URL
+    # Railway deployment
     backend_url = os.getenv("BACKEND_URL")
     if backend_url:
         return backend_url
     
-    # Default to working Heroku backend
-    return "https://yt-bot-backend-8302f5ba3275.herokuapp.com"
+    # Local development fallback - return None to trigger local mode
+    return None
 
 def extract_video_id(url):
     """Extract video ID from YouTube URL"""
@@ -160,7 +160,7 @@ def main():
         
         if backend_url:
             try:
-                response = requests.get(f"{backend_url}/api/health", timeout=5)
+                response = requests.get(f"{backend_url}/health", timeout=5)
                 if response.status_code == 200:
                     st.success("✅ Backend Online")
                     st.info("🌐 Production Mode")
@@ -338,10 +338,10 @@ def main():
                     "OPENAI_API_KEY",
                     "SUPABASE_URL",
                     "SUPABASE_KEY", 
-                    "DISCORD_WEBHOOK_UPLOADS",
-                    "DISCORD_WEBHOOK_TRANSCRIPTS",
-                    "DISCORD_WEBHOOK_SUMMARIES",
-                    "DISCORD_WEBHOOK_DAILY_REPORT"
+                    "DISCORD_UPLOADS_WEBHOOK",
+                    "DISCORD_TRANSCRIPTS_WEBHOOK",
+                    "DISCORD_SUMMARIES_WEBHOOK",
+                    "DISCORD_DAILY_REPORT_WEBHOOK"
                 ]
                 
                 for var in env_vars:

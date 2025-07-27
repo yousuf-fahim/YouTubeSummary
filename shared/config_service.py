@@ -44,10 +44,10 @@ class ConfigService:
     def get_discord_webhook(self, webhook_type: str) -> Optional[str]:
         """Get Discord webhook URL from environment variables"""
         env_map = {
-            'yt_uploads': 'DISCORD_UPLOADS_WEBHOOK',
-            'yt_transcripts': 'DISCORD_TRANSCRIPTS_WEBHOOK', 
-            'yt_summaries': 'DISCORD_SUMMARIES_WEBHOOK',
-            'daily_report': 'DISCORD_DAILY_REPORT_WEBHOOK'
+            'yt_uploads': 'DISCORD_WEBHOOK_UPLOADS',
+            'yt_transcripts': 'DISCORD_WEBHOOK_TRANSCRIPTS', 
+            'yt_summaries': 'DISCORD_WEBHOOK_SUMMARIES',
+            'daily_report': 'DISCORD_WEBHOOK_DAILY_REPORT'
         }
         
         env_var = env_map.get(webhook_type)
