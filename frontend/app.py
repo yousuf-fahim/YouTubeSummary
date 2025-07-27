@@ -185,6 +185,49 @@ def main():
                 st.success("✅ Local Functions Available")
             else:
                 st.error("❌ No Backend or Local Functions")
+        
+        # Add scheduler status display
+        st.subheader("⏰ Scheduler Status")
+        try:
+            from local_functions import get_scheduler_status
+            status = get_scheduler_status()
+            
+            if status.get('status') == 'success':
+                data = status.get('data', {})
+                scheduler_status = data.get('status', 'Unknown')
+                
+                if scheduler_status == 'running':
+                    st.success(f"✅ Scheduler: {scheduler_status}")
+                else:
+                    st.warning(f"⚠️ Scheduler: {scheduler_status}")
+                
+                # Daily report timer
+                daily_report = data.get('daily_report', {})
+                if daily_report and daily_report.get('time_until'):
+                    st.info(f"📅 Next Daily Report: {daily_report['time_until']}")
+                else:
+                    st.info("📅 Daily Report: 18:00 CEST")
+                
+                # Channel tracking info
+                channel_tracking = data.get('channel_tracking', {})
+                if channel_tracking:
+                    if channel_tracking.get('time_until'):
+                        st.info(f"📺 Next Channel Check: {channel_tracking['time_until']}")
+                    else:
+                        st.info("📺 Channel Tracking: Every 30 min")
+                
+                timezone = data.get('timezone', 'UTC')
+                st.caption(f"🌍 Timezone: {timezone}")
+                
+            else:
+                st.warning("⚠️ Scheduler status unavailable")
+                st.caption("Daily reports: 18:00 CEST")
+                st.caption("Channel tracking: Every 30 min")
+                
+        except Exception as e:
+            st.warning("⚠️ Scheduler info unavailable")
+            st.caption("Daily reports: 18:00 CEST")
+            st.caption("Channel tracking: Every 30 min")
     
     # Create tabs for different functions
     tab1, tab2, tab3, tab4 = st.tabs(["📹 Process Video", "📋 Channel Tracking", "⚙️ Configuration", "📊 Reports"])

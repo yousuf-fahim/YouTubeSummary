@@ -518,6 +518,68 @@ def trigger_daily_report():
     except Exception as e:
         return {"success": False, "error": f"Daily report error: {str(e)}"}
 
+def get_scheduler_status():
+    """Get scheduler status including next daily report and channel check times"""
+    try:
+        # First try backend API
+        backend_url = os.getenv('BACKEND_URL')
+        if backend_url and backend_url != "NOT_SET":
+            try:
+                import requests
+                response = requests.get(f"{backend_url}/api/scheduler/status", timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "running":
+                        print("✅ Scheduler status loaded from backend API")
+                        return {
+                            "status": "success",
+                            "data": data
+                        }
+            except Exception as e:
+                print(f"Backend API failed for scheduler status: {e}")
+        
+        # Fallback - calculate locally
+        from datetime import datetime, timedelta
+        import pytz
+        
+        cest = pytz.timezone('Europe/Paris')
+        now = datetime.now(cest)
+        
+        # Calculate next daily report (18:00 CEST)
+        today_report = now.replace(hour=18, minute=0, second=0, microsecond=0)
+        if now > today_report:
+            next_report = today_report + timedelta(days=1)
+        else:
+            next_report = today_report
+        
+        time_until = next_report - now
+        hours_until = int(time_until.total_seconds() // 3600)
+        minutes_until = int((time_until.total_seconds() % 3600) // 60)
+        
+        print("✅ Scheduler status calculated locally")
+        return {
+            "status": "success",
+            "data": {
+                "status": "running",
+                "daily_report": {
+                    "next_report": next_report.isoformat(),
+                    "time_until": f"{hours_until}h {minutes_until}m",
+                    "schedule": "Daily at 18:00 CEST"
+                },
+                "channel_tracking": {
+                    "schedule": "Every 30 minutes (when backend is running)"
+                },
+                "current_time": now.isoformat(),
+                "timezone": "Europe/Paris (CEST)"
+            }
+        }
+    except Exception as e:
+        print(f"Scheduler status error: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to get scheduler status: {str(e)}"
+        }
+
 def get_recent_summaries():
     """Get recent summaries from Supabase or fallback data"""
     try:

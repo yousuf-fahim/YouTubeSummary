@@ -613,10 +613,10 @@ async def check_all_channels():
 @app.get("/api/scheduler/status")
 async def get_scheduler_status():
     """
-    Get the scheduler status and next report time
+    Get the status of the scheduler including next daily report time and channel tracking
     
     Returns:
-        dict: Scheduler status information
+        dict: Scheduler status with timing information
     """
     try:
         from datetime import datetime, timedelta
@@ -641,13 +641,31 @@ async def get_scheduler_status():
         hours_until = int(time_until.total_seconds() // 3600)
         minutes_until = int((time_until.total_seconds() % 3600) // 60)
         
+        # Calculate next channel check (every 30 minutes)
+        current_minute = now.minute
+        next_check_minute = ((current_minute // 30) + 1) * 30
+        if next_check_minute >= 60:
+            next_check = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_check = now.replace(minute=next_check_minute, second=0, microsecond=0)
+        
+        check_time_until = next_check - now
+        check_minutes_until = int(check_time_until.total_seconds() // 60)
+        
         return {
             "status": "running",
-            "next_daily_report": next_report.isoformat(),
-            "time_until_next_report": f"{hours_until}h {minutes_until}m",
+            "daily_report": {
+                "next_report": next_report.isoformat(),
+                "time_until": f"{hours_until}h {minutes_until}m",
+                "schedule": "Daily at 18:00 CEST"
+            },
+            "channel_tracking": {
+                "next_check": next_check.isoformat(),
+                "time_until": f"{check_minutes_until}m",
+                "schedule": "Every 30 minutes"
+            },
             "current_time": now.isoformat(),
-            "timezone": "Europe/Paris (CEST)",
-            "report_schedule": "Daily at 18:00 CEST"
+            "timezone": "Europe/Paris (CEST)"
         }
     except Exception as e:
         logger.error(f"Error getting scheduler status: {e}")
@@ -751,11 +769,31 @@ async def start_bot():
         replace_existing=True
     )
     
+    # Add job for regular channel tracking every 30 minutes
+    scheduler.add_job(
+        check_channels_task,
+        'interval',
+        minutes=30,
+        id='channel_tracking',
+        replace_existing=True
+    )
+    
     # Start the scheduler
     scheduler.start()
     
     # Start the Discord listener
     await discord_listener.start()
+
+async def check_channels_task():
+    """Task to check tracked channels for new videos"""
+    logger.info("Scheduled channel check started")
+    try:
+        new_videos = await manual_check_channels()
+        logger.info(f"Channel check complete: {new_videos} new videos found")
+        return {"status": "success", "new_videos": new_videos}
+    except Exception as e:
+        logger.error(f"Error in channel check task: {e}")
+        return {"status": "error", "message": str(e)}
 
 async def trigger_daily_report_task():
     """Task to trigger the daily report"""
