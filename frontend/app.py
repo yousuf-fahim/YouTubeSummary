@@ -104,6 +104,36 @@ def check_service_status(backend_url):
     
     return backend_status, scheduler_status
 
+@st.cache_data(ttl=60)  # Cache for 60 seconds
+def get_channels_status(backend_url):
+    """Get channel status with caching to avoid repeated API calls"""
+    if not backend_url:
+        return None
+    
+    try:
+        response = requests.get(f"{backend_url}/api/channels/status", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"API returned {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@st.cache_data(ttl=120)  # Cache for 2 minutes  
+def get_scheduler_status(backend_url):
+    """Get scheduler status with caching"""
+    if not backend_url:
+        return None
+        
+    try:
+        response = requests.get(f"{backend_url}/api/scheduler/status", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"API returned {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 def sanitize_filename(title):
     """Convert video title to safe filename"""
     if not title:
@@ -212,6 +242,16 @@ if "transcripts" not in st.session_state:
 # Store transcript error messages
 if "transcript_error" not in st.session_state:
     st.session_state.transcript_error = None
+
+# Channel management session state
+if "channels_data" not in st.session_state:
+    st.session_state.channels_data = None
+    
+if "last_channel_update" not in st.session_state:
+    st.session_state.last_channel_update = 0
+
+if "channel_operation_result" not in st.session_state:
+    st.session_state.channel_operation_result = None
 
 def load_config():
     """Load configuration from Supabase or config.json"""
@@ -601,8 +641,14 @@ def main():
             st.error(f"⏰ Scheduler {scheduler_status}")
     
     with col4:
-        if st.button("⚙️ Settings"):
-            st.info("Settings moved to environment variables for security")
+        with st.form("settings_form"):
+            if st.form_submit_button("⚙️ Settings"):
+                st.session_state.settings_info = "Settings moved to environment variables for security"
+        
+        # Show settings info if button was clicked
+        if 'settings_info' in st.session_state and st.session_state.settings_info:
+            st.info(st.session_state.settings_info)
+            st.session_state.settings_info = ""
     
     # Main interface tabs
     tab1, tab2, tab3 = st.tabs(["🎬 Video Processor", "📺 Channel Manager", "🧪 System Test"])
@@ -639,18 +685,21 @@ def main():
             key="youtube_url_main"
         )
         
-        # Process button and quick actions
+        # Process button and quick actions using forms to prevent page resets
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            process_button = st.button("🚀 Process Video", type="primary", disabled=not youtube_url)
+            with st.form("main_video_process_form"):
+                process_button = st.form_submit_button("🚀 Process Video", type="primary", disabled=not youtube_url)
         with col2:
-            if st.button("📋 Sample Video"):
-                st.session_state.sample_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-                st.rerun()
+            with st.form("sample_video_form"):
+                if st.form_submit_button("📋 Sample Video"):
+                    st.session_state.sample_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                    st.rerun()
         with col3:
-            if st.button("🗑️ Clear"):
-                st.session_state.youtube_url_main = ""
-                st.rerun()
+            with st.form("clear_form"):
+                if st.form_submit_button("🗑️ Clear"):
+                    st.session_state.youtube_url_main = ""
+                    st.rerun()
         
         # Handle sample URL
         if hasattr(st.session_state, 'sample_url'):
@@ -772,7 +821,7 @@ def main():
             2. Set `BACKEND_URL` environment variable to point to your backend
             3. Backend handles channel tracking, scheduling, and Discord notifications
             """)
-            return
+            st.stop()  # Use st.stop() instead of return to avoid issues
         
         # Get scheduler status
         try:
@@ -797,176 +846,229 @@ def main():
                                 report_response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", 
                                                               headers={"Authorization": f"Bearer {token}"})
                                 if report_response.status_code == 200:
-                                    st.success("Daily report triggered successfully!")
+                                    st.session_state.report_trigger_result = "✅ Daily report triggered successfully!"
                                 else:
-                                    st.error("Failed to trigger daily report")
+                                    st.session_state.report_trigger_result = "❌ Failed to trigger daily report"
                             else:
-                                st.error("Failed to get authentication token")
+                                st.session_state.report_trigger_result = "❌ Failed to get authentication token"
                         except Exception as e:
-                            st.error(f"Error triggering report: {str(e)}")
+                            st.session_state.report_trigger_result = f"❌ Error triggering report: {str(e)}"
             else:
                 st.warning("Could not load scheduler status")
         except Exception as e:
             st.warning(f"Scheduler status unavailable: {str(e)}")
         
+        # Show report trigger results (if any)
+        if 'report_trigger_result' in st.session_state and st.session_state.report_trigger_result:
+            if st.session_state.report_trigger_result.startswith("✅"):
+                st.success(st.session_state.report_trigger_result)
+            else:
+                st.error(st.session_state.report_trigger_result)
+            # Clear the result after showing it
+            st.session_state.report_trigger_result = ""
+        
         st.divider()
         
-        # Get detailed channel status
-        try:
-            status_response = requests.get(f"{backend_url}/api/channels/status")
-            if status_response.status_code == 200:
-                status_data = status_response.json()
-                
-                # Summary metrics
-                st.subheader("📊 Channel Status Overview")
-                col1, col2, col3, col4 = st.columns(4)
-                summary = status_data.get("summary", {})
-                with col1:
-                    st.metric("Total Channels", status_data.get("total_channels", 0))
-                with col2:
-                    st.metric("Up to Date", summary.get("active", 0), delta=None)
-                with col3:
-                    new_content = summary.get("new_content", 0)
-                    st.metric("New Content", new_content, delta=f"+{new_content}" if new_content > 0 else None)
-                with col4:
-                    errors = summary.get("errors", 0)
-                    st.metric("Errors", errors, delta=f"-{errors}" if errors > 0 else None)
-                
-                # Global actions
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("🔄 Check All Channels"):
+        # Get detailed channel status with caching and session state
+        if 'force_refresh' not in st.session_state:
+            st.session_state.force_refresh = False
+            
+        # Auto-refresh every 30 seconds or manual refresh
+        current_time = time.time()
+        should_refresh = (
+            'last_channel_update' not in st.session_state or 
+            current_time - st.session_state.last_channel_update > 30 or
+            st.session_state.force_refresh
+        )
+        
+        if should_refresh or 'channels_data' not in st.session_state:
+            try:
+                status_response = requests.get(f"{backend_url}/api/channels/status")
+                if status_response.status_code == 200:
+                    st.session_state.channels_data = status_response.json()
+                    st.session_state.last_channel_update = current_time
+                    st.session_state.force_refresh = False
+                else:
+                    if 'channels_data' not in st.session_state:
+                        st.session_state.channels_data = None
+            except Exception as e:
+                if 'channels_data' not in st.session_state:
+                    st.session_state.channels_data = None
+        
+        # Display channel status from session state
+        if st.session_state.channels_data:
+            status_data = st.session_state.channels_data
+            
+            # Summary metrics
+            st.subheader("📊 Channel Status Overview")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            summary = status_data.get("summary", {})
+            with col1:
+                st.metric("Total Channels", status_data.get("total_channels", 0))
+            with col2:
+                st.metric("Up to Date", summary.get("active", 0), delta=None)
+            with col3:
+                new_content = summary.get("new_content", 0)
+                st.metric("New Content", new_content, delta=f"+{new_content}" if new_content > 0 else None)
+            with col4:
+                errors = summary.get("errors", 0)
+                st.metric("Errors", errors, delta=f"-{errors}" if errors > 0 else None)
+            with col5:
+                if st.button("🔄 Refresh", help="Refresh channel data"):
+                    st.session_state.force_refresh = True
+                    st.rerun()
+            
+            # Global actions with forms to prevent page resets
+            st.subheader("🎯 Global Actions")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                with st.form("check_all_form"):
+                    st.write("**Check All Channels for New Videos**")
+                    submit_check_all = st.form_submit_button("🔄 Check All Channels", type="primary")
+                    
+                    if submit_check_all:
                         with st.spinner("Checking all channels for new videos..."):
                             try:
                                 check_all_response = requests.post(f"{backend_url}/api/channels/check-all")
                                 if check_all_response.status_code == 200:
                                     result = check_all_response.json()
-                                    st.success(f"Found and processed {result.get('new_videos_count', 0)} new videos")
-                                    st.rerun()
+                                    st.session_state.channel_operation_result = f"✅ Found and processed {result.get('new_videos_count', 0)} new videos"
+                                    st.session_state.force_refresh = True
                                 else:
-                                    st.error("Failed to check channels")
+                                    st.session_state.channel_operation_result = "❌ Failed to check channels"
                             except Exception as e:
-                                st.error(f"Error checking channels: {str(e)}")
-                
-                st.divider()
-                
-                # Detailed channel list
-                st.subheader("📋 Channel Details")
-                
-                channels = status_data.get("channels", [])
-                if channels:
-                    for channel_info in channels:
-                        channel = channel_info["channel"]
-                        status = channel_info["status"]
-                        has_new = channel_info.get("has_new_videos", False)
-                        
-                        # Status icon and color
-                        if status == "up_to_date":
-                            status_icon = "✅"
-                        elif status == "new_content_available":
-                            status_icon = "🆕"
-                        elif status == "error":
-                            status_icon = "❌"
+                                st.session_state.channel_operation_result = f"❌ Error checking channels: {str(e)}"
+            
+            with col2:
+                with st.form("add_channel_form"):
+                    st.write("**Add New Channel**")
+                    new_channel = st.text_input(
+                        "Channel Handle:",
+                        placeholder="@channelname",
+                        help="Enter the YouTube channel handle starting with @"
+                    )
+                    submit_add_channel = st.form_submit_button("➕ Add Channel", type="secondary")
+                    
+                    if submit_add_channel:
+                        if new_channel:
+                            if not new_channel.startswith("@"):
+                                st.session_state.channel_operation_result = "❌ Channel handle must start with @"
+                            else:
+                                with st.spinner(f"Adding {new_channel}..."):
+                                    try:
+                                        add_response = requests.post(f"{backend_url}/api/channels/add", json={"channel": new_channel})
+                                        if add_response.status_code == 200:
+                                            st.session_state.channel_operation_result = f"✅ Added {new_channel} successfully"
+                                            st.session_state.force_refresh = True
+                                        else:
+                                            st.session_state.channel_operation_result = f"❌ Failed to add channel: {add_response.text}"
+                                    except Exception as e:
+                                        st.session_state.channel_operation_result = f"❌ Error adding channel: {str(e)}"
                         else:
-                            status_icon = "⚪"
+                            st.session_state.channel_operation_result = "❌ Please enter a channel handle"
+            
+            # Show operation results
+            if 'channel_operation_result' in st.session_state and st.session_state.channel_operation_result:
+                if st.session_state.channel_operation_result.startswith("✅"):
+                    st.success(st.session_state.channel_operation_result)
+                else:
+                    st.error(st.session_state.channel_operation_result)
+                # Clear the result after showing it
+                st.session_state.channel_operation_result = ""
+            
+            st.divider()
+            
+            # Detailed channel list
+            st.subheader("📋 Channel Details")
+            
+            channels = status_data.get("channels", [])
+            if channels:
+                # Create forms for individual channel actions to prevent page resets
+                for i, channel_info in enumerate(channels):
+                    channel = channel_info["channel"]
+                    status = channel_info["status"]
+                    has_new = channel_info.get("has_new_videos", False)
+                    
+                    # Status icon and color
+                    if status == "up_to_date":
+                        status_icon = "✅"
+                    elif status == "new_content_available":
+                        status_icon = "🆕"
+                    elif status == "error":
+                        status_icon = "❌"
+                    else:
+                        status_icon = "⚪"
+                    
+                    # Create expandable section for each channel
+                    with st.expander(f"{status_icon} **{channel}** - {status.replace('_', ' ').title()}", expanded=has_new):
+                        col1, col2, col3 = st.columns([2, 2, 1])
                         
-                        # Create expandable section for each channel
-                        with st.expander(f"{status_icon} **{channel}** - {status.replace('_', ' ').title()}", expanded=has_new):
-                            col1, col2, col3 = st.columns([2, 2, 1])
-                            
-                            with col1:
-                                # Last known video
-                                last_video = channel_info.get("last_known_video", {})
-                                if last_video.get("id"):
-                                    st.write("**Last Tracked Video:**")
-                                    st.write(f"ID: `{last_video['id']}`")
-                                    if last_video.get("title"):
-                                        st.write(f"Title: {last_video['title'][:50]}...")
-                                else:
-                                    st.write("**No videos tracked yet**")
-                            
-                            with col2:
-                                # Latest available video
-                                latest_video = channel_info.get("latest_available_video")
-                                if latest_video:
-                                    st.write("**Latest Available Video:**")
-                                    st.write(f"[{latest_video['title']}]({latest_video['url']})")
-                                    st.write(f"Published: {latest_video['publish_time'][:10]}")
-                                    if has_new:
-                                        st.success("🆕 New content detected!")
-                                else:
-                                    st.write("**No recent videos found**")
-                            
-                            with col3:
-                                # Channel actions
-                                if st.button(f"Check", key=f"check_{channel}"):
+                        with col1:
+                            # Last known video
+                            last_video = channel_info.get("last_known_video", {})
+                            if last_video.get("id"):
+                                st.write("**Last Tracked Video:**")
+                                st.write(f"ID: `{last_video['id']}`")
+                                if last_video.get("title"):
+                                    st.write(f"Title: {last_video['title'][:50]}...")
+                            else:
+                                st.write("**No videos tracked yet**")
+                        
+                        with col2:
+                            # Latest available video
+                            latest_video = channel_info.get("latest_available_video")
+                            if latest_video:
+                                st.write("**Latest Available Video:**")
+                                st.write(f"[{latest_video['title']}]({latest_video['url']})")
+                                st.write(f"Published: {latest_video['publish_time'][:10]}")
+                                if has_new:
+                                    st.success("🆕 New content detected!")
+                            else:
+                                st.write("**No recent videos found**")
+                        
+                        with col3:
+                            # Channel actions using forms
+                            with st.form(f"channel_actions_{i}"):
+                                col_check, col_remove = st.columns(2)
+                                with col_check:
+                                    submit_check = st.form_submit_button("Check", help=f"Check {channel} for new videos")
+                                with col_remove:
+                                    submit_remove = st.form_submit_button("Remove", help=f"Remove {channel} from tracking")
+                                
+                                if submit_check:
                                     with st.spinner(f"Checking {channel}..."):
                                         try:
                                             check_response = requests.post(f"{backend_url}/api/channels/check/{channel}")
                                             if check_response.status_code == 200:
-                                                result = check_response.json()
-                                                st.success(f"Checked {channel}")
-                                                st.rerun()
+                                                st.session_state.channel_operation_result = f"✅ Checked {channel} successfully"
+                                                st.session_state.force_refresh = True
                                             else:
-                                                st.error(f"Failed to check {channel}")
+                                                st.session_state.channel_operation_result = f"❌ Failed to check {channel}"
                                         except Exception as e:
-                                            st.error(f"Error: {str(e)}")
+                                            st.session_state.channel_operation_result = f"❌ Error checking {channel}: {str(e)}"
                                 
-                                if st.button(f"Remove", key=f"remove_{channel}"):
+                                if submit_remove:
                                     with st.spinner(f"Removing {channel}..."):
                                         try:
                                             remove_response = requests.delete(f"{backend_url}/api/channels/{channel}")
                                             if remove_response.status_code == 200:
-                                                st.success(f"Removed {channel}")
-                                                st.rerun()
+                                                st.session_state.channel_operation_result = f"✅ Removed {channel} successfully"
+                                                st.session_state.force_refresh = True
                                             else:
-                                                st.error(f"Failed to remove {channel}")
+                                                st.session_state.channel_operation_result = f"❌ Failed to remove {channel}"
                                         except Exception as e:
-                                            st.error(f"Error: {str(e)}")
-                            
-                            # Show error details if there's an error
-                            if status == "error" and "error" in channel_info:
-                                st.error(f"Error: {channel_info['error']}")
-                
-                else:
-                    st.info("No channels being tracked.")
+                                            st.session_state.channel_operation_result = f"❌ Error removing {channel}: {str(e)}"
+                        
+                        # Show error details if there's an error
+                        if status == "error" and "error" in channel_info:
+                            st.error(f"Error: {channel_info['error']}")
             else:
-                st.error("Failed to load channel status")
-        except Exception as e:
-            st.error(f"Error loading channel status: {str(e)}")
+                st.info("No channels being tracked.")
+        else:
+            st.error("Failed to load channel status")
         
         st.divider()
-        
-        # Add new channel section
-        st.subheader("➕ Add New Channel")
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_channel = st.text_input(
-                "Channel Handle:",
-                placeholder="@channelname",
-                help="Enter the YouTube channel handle starting with @"
-            )
-        with col2:
-            st.write("")  # Spacing
-            st.write("")  # Spacing
-            if st.button("Add Channel", type="primary"):
-                if new_channel:
-                    if not new_channel.startswith("@"):
-                        st.error("Channel handle must start with @")
-                    else:
-                        with st.spinner(f"Adding {new_channel}..."):
-                            try:
-                                add_response = requests.post(f"{backend_url}/api/channels/add", json={"channel": new_channel})
-                                if add_response.status_code == 200:
-                                    result = add_response.json()
-                                    st.success(f"Added {new_channel}")
-                                    st.rerun()
-                                else:
-                                    st.error(f"Failed to add channel: {add_response.text}")
-                            except Exception as e:
-                                st.error(f"Error adding channel: {str(e)}")
-                else:
-                    st.error("Please enter a channel handle")
 
     with tab3:
         st.header("🧪 System Testing & Diagnostics")
@@ -1006,22 +1108,34 @@ def main():
                 st.error("❌ Backend API")
             
             # Test OpenAI API
-            if st.button("🤖 Test OpenAI"):
-                openai_key = os.getenv("OPENAI_API_KEY")
-                if not openai_key:
-                    st.error("❌ OpenAI API key not found")
+            with st.form("test_openai_form"):
+                test_openai_submit = st.form_submit_button("🤖 Test OpenAI")
+                
+                if test_openai_submit:
+                    openai_key = os.getenv("OPENAI_API_KEY")
+                    if not openai_key:
+                        st.session_state.openai_test_result = "❌ OpenAI API key not found"
+                    else:
+                        with st.spinner("Testing OpenAI API..."):
+                            try:
+                                # Simple test using requests
+                                headers = {"Authorization": f"Bearer {openai_key}"}
+                                response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+                                if response.status_code == 200:
+                                    st.session_state.openai_test_result = "✅ OpenAI API connection successful"
+                                else:
+                                    st.session_state.openai_test_result = f"❌ OpenAI API error: {response.status_code}"
+                            except Exception as e:
+                                st.session_state.openai_test_result = f"❌ OpenAI API test failed: {str(e)}"
+            
+            # Show OpenAI test result
+            if 'openai_test_result' in st.session_state and st.session_state.openai_test_result:
+                if st.session_state.openai_test_result.startswith("✅"):
+                    st.success(st.session_state.openai_test_result)
                 else:
-                    with st.spinner("Testing OpenAI API..."):
-                        try:
-                            # Simple test using requests
-                            headers = {"Authorization": f"Bearer {openai_key}"}
-                            response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
-                            if response.status_code == 200:
-                                st.success("✅ OpenAI API connection successful")
-                            else:
-                                st.error(f"❌ OpenAI API error: {response.status_code}")
-                        except Exception as e:
-                            st.error(f"❌ OpenAI API test failed: {str(e)}")
+                    st.error(st.session_state.openai_test_result)
+                # Clear the result after showing it
+                st.session_state.openai_test_result = ""
         
         st.divider()
         
@@ -1030,48 +1144,64 @@ def main():
         
         # Video processing test
         st.markdown("**📹 Video Processing Test**")
-        test_url = st.text_input(
-            "Test YouTube URL:",
-            placeholder="https://www.youtube.com/watch?v=...",
-            key="test_video_url"
-        )
         
-        if st.button("🧪 Test Video Processing"):
-            if not test_url:
-                st.error("❌ Please enter a YouTube URL")
-            elif not is_valid_youtube_url(test_url):
-                st.error("❌ Invalid YouTube URL format")
-            else:
-                with st.spinner("🔄 Testing video processing..."):
-                    try:
-                        # Test transcript retrieval
-                        video_id = extract_video_id(test_url)
-                        if video_id:
-                            st.info(f"📹 Video ID: {video_id}")
-                        
-                        transcript = asyncio.run(get_cached_transcript(test_url))
-                        if transcript:
-                            st.success("✅ Transcript retrieval successful")
-                            st.info(f"📝 Transcript length: {len(transcript)} characters")
+        with st.form("video_processing_test_form"):
+            test_url = st.text_input(
+                "Test YouTube URL:",
+                placeholder="https://www.youtube.com/watch?v=...",
+                key="test_video_url"
+            )
+            test_video_submit = st.form_submit_button("🧪 Test Video Processing")
+            
+            if test_video_submit:
+                if not test_url:
+                    st.session_state.video_test_result = "❌ Please enter a YouTube URL"
+                elif not is_valid_youtube_url(test_url):
+                    st.session_state.video_test_result = "❌ Invalid YouTube URL format"
+                else:
+                    with st.spinner("🔄 Testing video processing..."):
+                        try:
+                            # Test transcript retrieval
+                            video_id = extract_video_id(test_url)
+                            if video_id:
+                                st.session_state.video_test_result = f"📹 Video ID: {video_id}\n"
                             
-                            # Test summarization if OpenAI key is available
-                            openai_key = os.getenv("OPENAI_API_KEY")
-                            if openai_key:
-                                st.info("🤖 Testing AI summarization...")
-                                summary = asyncio.run(chunk_and_summarize(transcript, openai_key))
-                                if summary:
-                                    st.success("✅ AI summarization successful")
-                                    st.json(summary)
+                            transcript = asyncio.run(get_cached_transcript(test_url))
+                            if transcript:
+                                st.session_state.video_test_result += f"✅ Transcript retrieval successful\n📝 Transcript length: {len(transcript)} characters\n"
+                                
+                                # Test summarization if OpenAI key is available
+                                openai_key = os.getenv("OPENAI_API_KEY")
+                                if openai_key:
+                                    summary = asyncio.run(chunk_and_summarize(transcript, openai_key))
+                                    if summary:
+                                        st.session_state.video_test_result += "✅ AI summarization successful"
+                                        st.session_state.video_test_summary = summary
+                                    else:
+                                        st.session_state.video_test_result += "❌ AI summarization failed"
                                 else:
-                                    st.error("❌ AI summarization failed")
+                                    st.session_state.video_test_result += "⚠️ No OpenAI key for summarization test"
                             else:
-                                st.warning("⚠️ No OpenAI key for summarization test")
-                        else:
-                            st.error("❌ Transcript retrieval failed")
-                            if st.session_state.transcript_error:
-                                st.warning(f"Error: {st.session_state.transcript_error}")
-                    except Exception as e:
-                        st.error(f"❌ Test failed: {str(e)}")
+                                st.session_state.video_test_result = "❌ Transcript retrieval failed"
+                                if st.session_state.transcript_error:
+                                    st.session_state.video_test_result += f"\nError: {st.session_state.transcript_error}"
+                        except Exception as e:
+                            st.session_state.video_test_result = f"❌ Test failed: {str(e)}"
+        
+        # Show video test results
+        if 'video_test_result' in st.session_state and st.session_state.video_test_result:
+            if st.session_state.video_test_result.startswith("❌"):
+                st.error(st.session_state.video_test_result)
+            else:
+                st.success(st.session_state.video_test_result)
+                
+            # Show summary data if available
+            if 'video_test_summary' in st.session_state:
+                st.json(st.session_state.video_test_summary)
+                del st.session_state.video_test_summary
+            
+            # Clear the result after showing it
+            st.session_state.video_test_result = ""
         
         st.divider()
         
@@ -1089,50 +1219,83 @@ def main():
             summaries_webhook = os.getenv("DISCORD_WEBHOOK_SUMMARIES")
             daily_report_webhook = os.getenv("DISCORD_WEBHOOK_DAILY_REPORT")
             
-            if uploads_webhook:
-                if st.button("🎬 Test Uploads Webhook"):
+            # Use forms for webhook tests to prevent page resets
+            with st.form("webhook_tests_form_1"):
+                col_uploads, col_transcripts = st.columns(2)
+                
+                with col_uploads:
+                    if uploads_webhook:
+                        test_uploads = st.form_submit_button("🎬 Test Uploads", help="Test uploads webhook")
+                    else:
+                        st.warning("No uploads webhook configured")
+                        test_uploads = False
+                
+                with col_transcripts:
+                    if transcripts_webhook:
+                        test_transcripts = st.form_submit_button("📝 Test Transcripts", help="Test transcripts webhook")
+                    else:
+                        st.warning("No transcripts webhook configured")
+                        test_transcripts = False
+                
+                if test_uploads and uploads_webhook:
                     with st.spinner("Testing uploads webhook..."):
                         success, message = asyncio.run(test_uploads_webhook(uploads_webhook))
                         if success:
-                            st.success(message)
+                            st.session_state.webhook_test_result = f"✅ Uploads: {message}"
                         else:
-                            st.error(message)
-            else:
-                st.warning("No uploads webhook configured")
-            
-            if transcripts_webhook:
-                if st.button("📝 Test Transcripts Webhook"):
+                            st.session_state.webhook_test_result = f"❌ Uploads: {message}"
+                
+                if test_transcripts and transcripts_webhook:
                     with st.spinner("Testing transcripts webhook..."):
                         success, message = asyncio.run(test_webhook(transcripts_webhook, "transcript"))
                         if success:
-                            st.success(message)
+                            st.session_state.webhook_test_result = f"✅ Transcripts: {message}"
                         else:
-                            st.error(message)
-            else:
-                st.warning("No transcripts webhook configured")
+                            st.session_state.webhook_test_result = f"❌ Transcripts: {message}"
         
         with col2:
-            if summaries_webhook:
-                if st.button("📊 Test Summaries Webhook"):
+            # Use forms for additional webhook tests
+            with st.form("webhook_tests_form_2"):
+                col_summaries, col_reports = st.columns(2)
+                
+                with col_summaries:
+                    if summaries_webhook:
+                        test_summaries = st.form_submit_button("📊 Test Summaries", help="Test summaries webhook")
+                    else:
+                        st.warning("No summaries webhook configured")
+                        test_summaries = False
+                
+                with col_reports:
+                    if daily_report_webhook:
+                        test_reports = st.form_submit_button("📅 Test Reports", help="Test daily report webhook")
+                    else:
+                        st.warning("No daily report webhook configured")
+                        test_reports = False
+                
+                if test_summaries and summaries_webhook:
                     with st.spinner("Testing summaries webhook..."):
                         success, message = asyncio.run(test_webhook(summaries_webhook, "summary"))
                         if success:
-                            st.success(message)
+                            st.session_state.webhook_test_result = f"✅ Summaries: {message}"
                         else:
-                            st.error(message)
-            else:
-                st.warning("No summaries webhook configured")
-            
-            if daily_report_webhook:
-                if st.button("📅 Test Daily Report Webhook"):
+                            st.session_state.webhook_test_result = f"❌ Summaries: {message}"
+                
+                if test_reports and daily_report_webhook:
                     with st.spinner("Testing daily report webhook..."):
                         success, message = asyncio.run(test_webhook(daily_report_webhook, "daily_report"))
                         if success:
-                            st.success(message)
+                            st.session_state.webhook_test_result = f"✅ Reports: {message}"
                         else:
-                            st.error(message)
+                            st.session_state.webhook_test_result = f"❌ Reports: {message}"
+        
+        # Show webhook test results
+        if 'webhook_test_result' in st.session_state and st.session_state.webhook_test_result:
+            if st.session_state.webhook_test_result.startswith("✅"):
+                st.success(st.session_state.webhook_test_result)
             else:
-                st.warning("No daily report webhook configured")
+                st.error(st.session_state.webhook_test_result)
+            # Clear the result after showing it
+            st.session_state.webhook_test_result = ""
         
         st.divider()
         
@@ -1143,97 +1306,126 @@ def main():
         
         with col1:
             st.markdown("**Channel Management**")
-            test_channel = st.text_input("Test Channel Handle:", placeholder="@channelname", key="test_channel")
             
-            if st.button("🧪 Test Channel Videos"):
-                if test_channel:
-                    if not test_channel.startswith("@"):
-                        st.error("Channel handle must start with @")
+            with st.form("test_channel_form"):
+                test_channel = st.text_input("Test Channel Handle:", placeholder="@channelname", key="test_channel")
+                test_channel_submit = st.form_submit_button("🧪 Test Channel Videos")
+                
+                if test_channel_submit:
+                    if test_channel:
+                        if not test_channel.startswith("@"):
+                            st.session_state.api_test_result = "❌ Channel handle must start with @"
+                        else:
+                            with st.spinner(f"Fetching latest videos from {test_channel}..."):
+                                try:
+                                    response = requests.post(f"{backend_url}/api/channels/check/{test_channel}")
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        st.session_state.api_test_result = "✅ Channel check successful!"
+                                        st.session_state.api_test_data = result
+                                    else:
+                                        st.session_state.api_test_result = f"❌ Channel check failed: {response.text}"
+                                except Exception as e:
+                                    st.session_state.api_test_result = f"❌ Error checking channel: {str(e)}"
                     else:
-                        with st.spinner(f"Fetching latest videos from {test_channel}..."):
-                            try:
-                                response = requests.post(f"{backend_url}/api/channels/check/{test_channel}")
-                                if response.status_code == 200:
-                                    result = response.json()
-                                    st.success("Channel check successful!")
-                                    st.json(result)
-                                else:
-                                    st.error(f"Channel check failed: {response.text}")
-                            except Exception as e:
-                                st.error(f"Error checking channel: {str(e)}")
-                else:
-                    st.error("Please enter a channel handle")
+                        st.session_state.api_test_result = "❌ Please enter a channel handle"
         
         with col2:
             st.markdown("**Daily Reports**")
-            if st.button("📊 Generate Test Daily Report"):
-                with st.spinner("Generating daily report..."):
-                    try:
-                        # Get webhook token first
-                        token_response = requests.get(f"{backend_url}/api/webhook-token")
-                        if token_response.status_code == 200:
-                            token_data = token_response.json()
-                            token = token_data.get("token")
-                            
-                            # Trigger daily report
-                            headers = {"Authorization": f"Bearer {token}"}
-                            response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", headers=headers)
-                            if response.status_code == 200:
-                                result = response.json()
-                                st.success("Daily report generated successfully!")
-                                st.json(result)
+            
+            with st.form("test_daily_report_form"):
+                test_daily_report_submit = st.form_submit_button("📊 Generate Test Daily Report")
+                
+                if test_daily_report_submit:
+                    with st.spinner("Generating daily report..."):
+                        try:
+                            # Get webhook token first
+                            token_response = requests.get(f"{backend_url}/api/webhook-token")
+                            if token_response.status_code == 200:
+                                token_data = token_response.json()
+                                token = token_data.get("token")
+                                
+                                # Trigger daily report
+                                headers = {"Authorization": f"Bearer {token}"}
+                                response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", headers=headers)
+                                if response.status_code == 200:
+                                    result = response.json()
+                                    st.session_state.api_test_result = "✅ Daily report generated successfully!"
+                                    st.session_state.api_test_data = result
+                                else:
+                                    st.session_state.api_test_result = f"❌ Daily report failed: {response.text}"
                             else:
-                                st.error(f"Daily report failed: {response.text}")
-                        else:
-                            st.error("Failed to get webhook token")
-                    except Exception as e:
-                        st.error(f"Error generating daily report: {str(e)}")
+                                st.session_state.api_test_result = "❌ Failed to get webhook token"
+                        except Exception as e:
+                            st.session_state.api_test_result = f"❌ Error generating daily report: {str(e)}"
+        
+        # Show API test results
+        if 'api_test_result' in st.session_state and st.session_state.api_test_result:
+            if st.session_state.api_test_result.startswith("✅"):
+                st.success(st.session_state.api_test_result)
+                if 'api_test_data' in st.session_state:
+                    st.json(st.session_state.api_test_data)
+                    del st.session_state.api_test_data
+            else:
+                st.error(st.session_state.api_test_result)
+            # Clear the result after showing it
+            st.session_state.api_test_result = ""
         
         st.divider()
         
         # Configuration testing
         st.subheader("⚙️ Configuration Testing")
         
-        if st.button("🔍 Test All Configurations"):
-            with st.spinner("Testing all configurations..."):
-                config_results = {}
-                
-                # Test OpenAI
-                openai_key = os.getenv("OPENAI_API_KEY")
-                if openai_key:
+        with st.form("config_test_form"):
+            test_all_configs = st.form_submit_button("🔍 Test All Configurations", type="primary")
+            
+            if test_all_configs:
+                with st.spinner("Testing all configurations..."):
+                    config_results = {}
+                    
+                    # Test OpenAI
+                    openai_key = os.getenv("OPENAI_API_KEY")
+                    if openai_key:
+                        try:
+                            headers = {"Authorization": f"Bearer {openai_key}"}
+                            response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+                            config_results["OpenAI API"] = "✅ Working" if response.status_code == 200 else f"❌ Error {response.status_code}"
+                        except:
+                            config_results["OpenAI API"] = "❌ Connection failed"
+                    else:
+                        config_results["OpenAI API"] = "❌ Not configured"
+                    
+                    # Test Backend
                     try:
-                        headers = {"Authorization": f"Bearer {openai_key}"}
-                        response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
-                        config_results["OpenAI API"] = "✅ Working" if response.status_code == 200 else f"❌ Error {response.status_code}"
+                        response = requests.get(f"{backend_url}/api/health", timeout=5)
+                        config_results["Backend API"] = "✅ Working" if response.status_code == 200 else f"❌ Error {response.status_code}"
                     except:
-                        config_results["OpenAI API"] = "❌ Connection failed"
+                        config_results["Backend API"] = "❌ Offline"
+                    
+                    # Test webhooks
+                    webhook_vars = ["DISCORD_WEBHOOK_UPLOADS", "DISCORD_WEBHOOK_TRANSCRIPTS", 
+                                  "DISCORD_WEBHOOK_SUMMARIES", "DISCORD_WEBHOOK_DAILY_REPORT"]
+                    
+                    for var in webhook_vars:
+                        webhook_url = os.getenv(var)
+                        if webhook_url:
+                            config_results[var.replace("DISCORD_WEBHOOK_", "").title()] = "✅ Configured"
+                        else:
+                            config_results[var.replace("DISCORD_WEBHOOK_", "").title()] = "❌ Not set"
+                    
+                    # Store results for display
+                    st.session_state.config_test_results = config_results
+        
+        # Show configuration test results
+        if 'config_test_results' in st.session_state:
+            st.markdown("**Configuration Test Results:**")
+            for service, status in st.session_state.config_test_results.items():
+                if "✅" in status:
+                    st.success(f"{service}: {status}")
                 else:
-                    config_results["OpenAI API"] = "❌ Not configured"
-                
-                # Test Backend
-                try:
-                    response = requests.get(f"{backend_url}/api/health", timeout=5)
-                    config_results["Backend API"] = "✅ Working" if response.status_code == 200 else f"❌ Error {response.status_code}"
-                except:
-                    config_results["Backend API"] = "❌ Offline"
-                
-                # Test webhooks
-                webhook_vars = ["DISCORD_WEBHOOK_UPLOADS", "DISCORD_WEBHOOK_TRANSCRIPTS", 
-                              "DISCORD_WEBHOOK_SUMMARIES", "DISCORD_WEBHOOK_DAILY_REPORT"]
-                
-                for var in webhook_vars:
-                    webhook_url = os.getenv(var)
-                    if webhook_url:
-                        config_results[var.replace("DISCORD_WEBHOOK_", "").title()] = "✅ Configured"
-                    else:
-                        config_results[var.replace("DISCORD_WEBHOOK_", "").title()] = "❌ Not set"
-                
-                # Display results
-                for service, status in config_results.items():
-                    if "✅" in status:
-                        st.success(f"{service}: {status}")
-                    else:
-                        st.error(f"{service}: {status}")
+                    st.error(f"{service}: {status}")
+            # Clear results after showing
+            del st.session_state.config_test_results
     
     # Footer
     st.divider()
