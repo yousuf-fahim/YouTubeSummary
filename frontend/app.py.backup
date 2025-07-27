@@ -694,15 +694,18 @@ def main():
             with st.form("sample_video_form"):
                 if st.form_submit_button("📋 Sample Video"):
                     st.session_state.sample_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                    st.rerun()
         with col3:
             with st.form("clear_form"):
                 if st.form_submit_button("🗑️ Clear"):
                     st.session_state.youtube_url_main = ""
+                    st.rerun()
         
         # Handle sample URL
         if hasattr(st.session_state, 'sample_url'):
             youtube_url = st.session_state.sample_url
             del st.session_state.sample_url
+            st.rerun()
         
         if youtube_url and process_button:
             if not is_valid_youtube_url(youtube_url):
@@ -834,26 +837,22 @@ def main():
                 with col2:
                     st.metric("Schedule", scheduler_data.get("report_schedule", "Unknown"))
                 with col3:
-                    with st.form("trigger_daily_report_form"):
-                        st.write("**Trigger Daily Report Now**")
-                        submit_trigger = st.form_submit_button("🚀 Trigger Now", type="primary")
-                        
-                        if submit_trigger:
-                            # Get webhook token
-                            try:
-                                token_response = requests.get(f"{backend_url}/api/webhook-token")
-                                if token_response.status_code == 200:
-                                    token = token_response.json()["token"]
-                                    report_response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", 
-                                                                  headers={"Authorization": f"Bearer {token}"})
-                                    if report_response.status_code == 200:
-                                        st.session_state.report_trigger_result = "✅ Daily report triggered successfully!"
-                                    else:
-                                        st.session_state.report_trigger_result = "❌ Failed to trigger daily report"
+                    if st.button("� Trigger Now"):
+                        # Get webhook token
+                        try:
+                            token_response = requests.get(f"{backend_url}/api/webhook-token")
+                            if token_response.status_code == 200:
+                                token = token_response.json()["token"]
+                                report_response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", 
+                                                              headers={"Authorization": f"Bearer {token}"})
+                                if report_response.status_code == 200:
+                                    st.session_state.report_trigger_result = "✅ Daily report triggered successfully!"
                                 else:
-                                    st.session_state.report_trigger_result = "❌ Failed to get authentication token"
-                            except Exception as e:
-                                st.session_state.report_trigger_result = f"❌ Error triggering report: {str(e)}"
+                                    st.session_state.report_trigger_result = "❌ Failed to trigger daily report"
+                            else:
+                                st.session_state.report_trigger_result = "❌ Failed to get authentication token"
+                        except Exception as e:
+                            st.session_state.report_trigger_result = f"❌ Error triggering report: {str(e)}"
             else:
                 st.warning("Could not load scheduler status")
         except Exception as e:
@@ -915,10 +914,9 @@ def main():
                 errors = summary.get("errors", 0)
                 st.metric("Errors", errors, delta=f"-{errors}" if errors > 0 else None)
             with col5:
-                with st.form("refresh_data_form"):
-                    submit_refresh = st.form_submit_button("🔄 Refresh", help="Refresh channel data")
-                    if submit_refresh:
-                        st.session_state.force_refresh = True
+                if st.button("🔄 Refresh", help="Refresh channel data"):
+                    st.session_state.force_refresh = True
+                    st.rerun()
             
             # Global actions with forms to prevent page resets
             st.subheader("🎯 Global Actions")
