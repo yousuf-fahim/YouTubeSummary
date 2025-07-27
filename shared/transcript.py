@@ -13,6 +13,48 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
+def sanitize_filename(title):
+    """Convert video title to safe filename"""
+    # Remove invalid characters for filenames
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Replace spaces with underscores and limit length
+    sanitized = sanitized.replace(' ', '_')
+    # Limit length to avoid filesystem issues
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized
+
+def save_transcript_to_local_file(video_id, transcript, title, channel):
+    """Save transcript text to a local file with video title as filename"""
+    try:
+        # Create safe filename from title
+        if title and title != 'Unknown Title':
+            safe_title = sanitize_filename(title)
+            filename = f"{safe_title}.txt"
+        else:
+            filename = f"{video_id}.txt"
+        
+        # Create transcripts directory if it doesn't exist
+        transcripts_dir = os.path.join(os.path.dirname(__file__), 'data', 'transcripts')
+        os.makedirs(transcripts_dir, exist_ok=True)
+        
+        filepath = os.path.join(transcripts_dir, filename)
+        
+        # Write transcript to file with metadata
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"Video Title: {title}\n")
+            f.write(f"Channel: {channel}\n")
+            f.write(f"Video ID: {video_id}\n")
+            f.write(f"Extracted: {re.sub(r'\\.[0-9]+', '', str(os.path.getctime(filepath)) if os.path.exists(filepath) else 'Now')}\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(transcript)
+        
+        print(f"✅ Transcript saved locally as: {filename}")
+        return filepath
+    except Exception as e:
+        print(f"Error saving transcript to local file: {e}")
+        return None
+
 def extract_video_id(url):
     """Extract the video ID from a YouTube URL"""
     youtube_regex = r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})'
@@ -87,6 +129,8 @@ async def get_transcript(youtube_url):
             title, channel = await get_video_details(video_id)
             # Save to Supabase
             save_supabase_transcript(video_id, transcript, title, channel)
+            # Save to local file
+            save_transcript_to_local_file(video_id, transcript, title, channel)
             return transcript
     except _errors.NoTranscriptFound as e:
         error_reasons.append(f"No transcript available: {str(e)}")
@@ -106,6 +150,8 @@ async def get_transcript(youtube_url):
             title, channel = await get_video_details(video_id)
             # Save to Supabase
             save_supabase_transcript(video_id, transcript, title, channel)
+            # Save to local file
+            save_transcript_to_local_file(video_id, transcript, title, channel)
             return transcript
     except Exception as e:
         error_reasons.append(f"Tactiq API error: {str(e)}")
@@ -120,6 +166,8 @@ async def get_transcript(youtube_url):
             title, channel = await get_video_details(video_id)
             # Save to Supabase
             save_supabase_transcript(video_id, transcript, title, channel)
+            # Save to local file
+            save_transcript_to_local_file(video_id, transcript, title, channel)
             return transcript
     except Exception as e:
         error_reasons.append(f"Failed to get transcript in any language: {str(e)}")

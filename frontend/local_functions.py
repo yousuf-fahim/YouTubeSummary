@@ -122,12 +122,62 @@ def fallback_summary(transcript, title):
 
 *Note: This is a basic summary. Full AI summarization requires OpenAI API configuration.*"""
 
+def sanitize_filename(title):
+    """Convert video title to safe filename"""
+    # Remove invalid characters for filenames
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Replace spaces with underscores and limit length
+    sanitized = sanitized.replace(' ', '_')
+    # Limit length to avoid filesystem issues
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized
+
+def save_transcript_to_file(video_id, transcript, title):
+    """Save transcript text to a file with video title as filename"""
+    try:
+        # Create safe filename from title
+        if title and title != 'Unknown Title':
+            safe_title = sanitize_filename(title)
+            filename = f"{safe_title}.txt"
+        else:
+            filename = f"{video_id}.txt"
+        
+        # Create transcripts directory if it doesn't exist
+        transcripts_dir = os.path.join(os.path.dirname(__file__), '..', 'shared', 'data', 'transcripts')
+        os.makedirs(transcripts_dir, exist_ok=True)
+        
+        filepath = os.path.join(transcripts_dir, filename)
+        
+        # Write transcript to file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(transcript)
+        
+        print(f"✅ Transcript saved as: {filename}")
+        return filepath
+    except Exception as e:
+        print(f"Error saving transcript to file: {e}")
+        # Fallback to video ID filename
+        try:
+            transcripts_dir = os.path.join(os.path.dirname(__file__), '..', 'shared', 'data', 'transcripts')
+            os.makedirs(transcripts_dir, exist_ok=True)
+            filepath = os.path.join(transcripts_dir, f"{video_id}.txt")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(transcript)
+            
+            print(f"✅ Transcript saved as: {video_id}.txt (fallback)")
+            return filepath
+        except Exception as fallback_error:
+            print(f"Failed to save transcript: {fallback_error}")
+            return None
+
 def test_video_processing(youtube_url):
     """Test video processing with local functions"""
     video_id = extract_video_id(youtube_url)
     if not video_id:
         return {"success": False, "error": "Invalid YouTube URL"}
-    
+
     try:
         # Get video info
         title, channel = get_video_title(video_id)
@@ -135,10 +185,11 @@ def test_video_processing(youtube_url):
         # Get transcript
         transcript = simple_transcript_extraction(video_id)
         
-        # Generate summary
-        summary = simple_summarization(transcript, title)
+        # Save transcript as .txt file with video title
+        transcript_file = save_transcript_to_file(video_id, transcript, title)
         
-        # Send to Discord webhooks
+        # Generate summary
+        summary = simple_summarization(transcript, title)        # Send to Discord webhooks
         discord_sent = False
         summary_sent = False
         transcript_sent = False
@@ -191,6 +242,7 @@ def test_video_processing(youtube_url):
             "title": title,
             "channel": channel,
             "transcript": transcript,
+            "transcript_file": transcript_file,
             "summary": summary,
             "discord_sent": discord_sent
         }
