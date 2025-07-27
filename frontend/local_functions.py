@@ -253,15 +253,36 @@ def test_video_processing(youtube_url):
         return {"success": False, "error": str(e)}
 
 def get_local_channels():
-    """Get channels from Supabase or local storage with caching"""
+    """Get channels from backend API or Supabase/local storage with caching"""
     try:
-        # Try to use the real function first
+        # First try backend API
+        backend_url = os.getenv('BACKEND_URL')
+        if backend_url and backend_url != "NOT_SET":
+            try:
+                import requests
+                response = requests.get(f"{backend_url}/api/channels", timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "success":
+                        channels = data.get("channels", [])
+                        last_videos = data.get("last_videos", {})
+                        print(f"✅ Loaded {len(channels)} channels from backend API")
+                        return {
+                            "status": "success",
+                            "channels": channels,
+                            "last_videos": last_videos
+                        }
+            except Exception as e:
+                print(f"Backend API failed, using fallback: {e}")
+        
+        # Fallback to direct Supabase/local access
         from shared.supabase_utils import get_tracked_channels
         data = get_tracked_channels()
         
         if data and 'tracked_channels' in data:
             channels = data.get("tracked_channels", [])
             last_videos = data.get("last_videos", {})
+            print(f"✅ Loaded {len(channels)} channels from direct access")
             
             return {
                 "status": "success",
@@ -269,7 +290,7 @@ def get_local_channels():
                 "last_videos": last_videos
             }
         else:
-            # If no data from Supabase, return existing tracked channels
+            # If no data from Supabase, return sample tracked channels
             return {
                 "status": "success", 
                 "channels": ["@LinusTechTips", "@TED", "https://www.youtube.com/@mkbhd"],
@@ -280,6 +301,7 @@ def get_local_channels():
                 }
             }
     except Exception as e:
+        print(f"Channel loading error: {e}")
         # Fallback to sample data with realistic info
         return {
             "status": "success", 
@@ -292,32 +314,78 @@ def get_local_channels():
         }
 
 def add_local_channel(channel_input):
-    """Add channel using real or fallback functions"""
+    """Add channel using backend API or fallback functions"""
     try:
-        # Try to use the real function
+        # First try backend API
+        backend_url = os.getenv('BACKEND_URL')
+        if backend_url and backend_url != "NOT_SET":
+            try:
+                import requests
+                response = requests.post(
+                    f"{backend_url}/api/channels/add",
+                    json={"channel": channel_input},
+                    timeout=15
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "success":
+                        print(f"✅ Channel {channel_input} added via backend API")
+                        return {
+                            "status": "success",
+                            "message": f"Channel {channel_input} added successfully"
+                        }
+                    else:
+                        print(f"Backend API error: {data.get('message')}")
+            except Exception as e:
+                print(f"Backend API failed for add channel: {e}")
+        
+        # Fallback to direct function
         from shared.supabase_utils import save_tracked_channel
         save_tracked_channel(channel_input)
+        print(f"✅ Channel {channel_input} added via direct access")
         return {
             "status": "success",
             "message": f"Channel {channel_input} added successfully"
         }
     except Exception as e:
+        print(f"Add channel error: {e}")
         return {
             "status": "success",  # Return success for testing
             "message": f"Channel {channel_input} added (local mode)"
         }
 
 def remove_local_channel(channel_id):
-    """Remove channel using real or fallback functions"""
+    """Remove channel using backend API or fallback functions"""
     try:
-        # Try to use the real function
+        # First try backend API
+        backend_url = os.getenv('BACKEND_URL')
+        if backend_url and backend_url != "NOT_SET":
+            try:
+                import requests
+                response = requests.delete(f"{backend_url}/api/channels/{channel_id}", timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "success":
+                        print(f"✅ Channel {channel_id} removed via backend API")
+                        return {
+                            "status": "success",
+                            "message": f"Channel {channel_id} removed successfully"
+                        }
+                    else:
+                        print(f"Backend API error: {data.get('message')}")
+            except Exception as e:
+                print(f"Backend API failed for remove channel: {e}")
+        
+        # Fallback to direct function
         from shared.supabase_utils import delete_tracked_channel
         delete_tracked_channel(channel_id)
+        print(f"✅ Channel {channel_id} removed via direct access")
         return {
             "status": "success",
             "message": f"Channel {channel_id} removed successfully"
         }
     except Exception as e:
+        print(f"Remove channel error: {e}")
         return {
             "status": "success",  # Return success for testing
             "message": f"Channel {channel_id} removed (local mode)"
@@ -365,32 +433,90 @@ def test_discord_webhook():
         return {"success": False, "error": "No Discord webhook URL configured"}
 
 def trigger_daily_report():
-    """Trigger daily report using real function if available"""
+    """Trigger daily report using backend API or real function if available"""
     try:
-        # Try to use the real function
+        # First try using the backend API
+        backend_url = os.getenv('BACKEND_URL')
+        if backend_url and backend_url != "NOT_SET":
+            import requests
+            response = requests.post(f"{backend_url}/api/webhook/trigger-daily-report", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return {"success": True, "message": data.get("message", "Daily report triggered via backend")}
+            else:
+                print(f"Backend API failed: {response.status_code}")
+        
+        # Fallback to direct function call
         from shared.summarize import generate_daily_report
         from shared.supabase_utils import get_all_summaries
+        from shared.discord_utils import send_discord_message, send_file_to_discord
+        from datetime import datetime
         
         openai_key = os.getenv('OPENAI_API_KEY')
+        daily_webhook = os.getenv('DISCORD_WEBHOOK_DAILY_REPORT')
+        
         if not openai_key or openai_key == "NOT_SET":
             return {"success": False, "error": "OpenAI API key not configured"}
         
+        if not daily_webhook or daily_webhook == "NOT_SET":
+            return {"success": False, "error": "Daily report webhook not configured"}
+        
         # Get recent summaries
         summaries = get_all_summaries()
+        
+        # Filter for today's summaries
+        today_summaries = []
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        for summary in summaries:
+            if today in summary.get("created_at", ""):
+                formatted_summary = {
+                    "title": summary.get("title", "Unknown Video"),
+                    "summary": summary.get("summary_text", ""),
+                    "points": summary.get("points", []),
+                    "verdict": summary.get("verdict", ""),
+                    "noteworthy_mentions": summary.get("noteworthy_mentions", []),
+                    "url": f"https://www.youtube.com/watch?v={summary.get('video_id', '')}"
+                }
+                today_summaries.append(formatted_summary)
+        
+        if not today_summaries:
+            return {"success": True, "message": "No summaries found for today"}
         
         # Generate report
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            report = loop.run_until_complete(generate_daily_report(summaries, openai_key))
-            return {"success": True, "message": "Daily report generated successfully"}
+            report = loop.run_until_complete(generate_daily_report(today_summaries, openai_key))
+            
+            if report:
+                # Send to Discord - as message if short, file if long
+                if len(report) <= 2000:
+                    result = loop.run_until_complete(send_discord_message(
+                        daily_webhook,
+                        title="📅 Daily Summary Report",
+                        description=report,
+                        color=3447003
+                    ))
+                    print("✅ Daily report sent as Discord message")
+                else:
+                    # Send as file for long reports
+                    result = loop.run_until_complete(send_file_to_discord(
+                        daily_webhook,
+                        report,
+                        f"daily_report_{today}.txt",
+                        "📅 Daily Summary Report (Full report attached as file)"
+                    ))
+                    print("✅ Daily report sent as Discord file")
+                
+                return {"success": True, "message": "Daily report generated and sent to Discord"}
+            else:
+                return {"success": False, "error": "Failed to generate daily report"}
         finally:
             loop.close()
+            
     except Exception as e:
-        return {
-            "success": True,  # Return success for testing
-            "message": f"Daily report would be generated here: {str(e)}"
-        }
+        return {"success": False, "error": f"Daily report error: {str(e)}"}
 
 def get_recent_summaries():
     """Get recent summaries from Supabase or fallback data"""
