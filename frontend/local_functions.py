@@ -194,25 +194,28 @@ def test_video_processing(youtube_url):
         summary_sent = False
         transcript_sent = False
         
-        # Send transcript to transcript webhook
+        # Send transcript file to transcript webhook
         transcript_webhook = os.getenv('DISCORD_WEBHOOK_TRANSCRIPTS')
-        if transcript_webhook and transcript_webhook != "NOT_SET" and transcript:
+        if transcript_webhook and transcript_webhook != "NOT_SET" and transcript and transcript_file:
             try:
-                from shared.discord_utils import send_discord_message
+                from shared.discord_utils import send_file_to_discord
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    # Send transcript (truncated if too long)
-                    transcript_content = f"📝 **TRANSCRIPT: {title}**\n\n{transcript[:1500]}..."
-                    transcript_result = loop.run_until_complete(send_discord_message(
+                    # Send transcript as file attachment
+                    filename = os.path.basename(transcript_file)
+                    file_message = f"📝 **TRANSCRIPT: {title}**"
+                    transcript_result = loop.run_until_complete(send_file_to_discord(
                         transcript_webhook,
-                        transcript_content
+                        transcript,
+                        filename,
+                        file_message
                     ))
                     transcript_sent = bool(transcript_result)
                 finally:
                     loop.close()
             except Exception as e:
-                print(f"Transcript Discord error: {e}")
+                print(f"Transcript Discord file error: {e}")
         
         # Send summary to summary webhook
         summary_webhook = os.getenv('DISCORD_WEBHOOK_SUMMARIES')
