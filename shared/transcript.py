@@ -227,9 +227,27 @@ def _get_transcript_from_api(video_id):
         str: The transcript text or None if not found
     """
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        # Get transcript data (list of dictionaries)
+        transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        # Verify the transcript data is in expected format
+        if not transcript_data or not isinstance(transcript_data, list):
+            raise ValueError("Invalid transcript data format")
+        
+        # Check if segments have the expected structure
+        for segment in transcript_data[:3]:  # Check first 3 segments
+            if not isinstance(segment, dict) or 'text' not in segment:
+                raise ValueError(f"Invalid segment format: {segment}")
+        
+        # Use TextFormatter to format the transcript
         formatter = TextFormatter()
-        return formatter.format_transcript(transcript)
+        formatted_text = formatter.format_transcript(transcript_data)
+        
+        if formatted_text and len(formatted_text.strip()) > 0:
+            return formatted_text
+        else:
+            raise ValueError("Empty transcript after formatting")
+            
     except Exception as e:
         print(f"YouTube API transcript error: {e}")
         raise 

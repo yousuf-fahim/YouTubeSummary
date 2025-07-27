@@ -60,7 +60,11 @@ def get_backend_url():
         return backend_url
     
     # Default URLs based on environment
-    if os.getenv("RAILWAY_ENVIRONMENT"):
+    # Railway detection: Check multiple Railway-specific variables
+    railway_vars = ["RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_PUBLIC_DOMAIN", "RAILWAY_PROJECT_ID"]
+    is_railway = any(os.getenv(var) for var in railway_vars)
+    
+    if is_railway:
         # Railway deployment - no backend by default
         return None
     elif os.getenv("STREAMLIT_SHARING"):
