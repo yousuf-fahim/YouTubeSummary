@@ -327,28 +327,60 @@ async def process_video(request: VideoProcessRequest):
 async def get_channels():
     """Get all tracked channels"""
     try:
-        channels = get_tracked_channels()  # Remove await since it's not async
+        channels_data = get_tracked_channels()  # This returns a dict with tracked_channels key
+        
+        # Ensure we return the expected format
+        if isinstance(channels_data, dict):
+            tracked_channels = channels_data.get("tracked_channels", [])
+            last_videos = channels_data.get("last_videos", {})
+        else:
+            tracked_channels = channels_data if isinstance(channels_data, list) else []
+            last_videos = {}
+        
         return {
             "status": "success",
-            "channels": channels,
-            "count": len(channels)
+            "tracked_channels": tracked_channels,
+            "last_videos": last_videos,
+            "count": len(tracked_channels)
         }
     except Exception as e:
         logger.error(f"Error getting channels: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/channels")
-async def add_channel(request: ChannelRequest):
+@app.post("/api/channels/add")
+async def add_channel(request: dict):
     """Add a channel to tracking"""
     try:
-        save_tracked_channel(request.channel_id)  # Only pass channel_id
+        channel_input = request.get("channel_input")
+        if not channel_input:
+            raise HTTPException(status_code=400, detail="channel_input is required")
+        
+        # Extract channel ID from URL or use as-is if it's already an ID
+        if "youtube.com" in channel_input:
+            # Extract channel ID from URL
+            if "/@" in channel_input:
+                # Handle @username format
+                channel_id = channel_input.split("/@")[-1]
+            elif "/channel/" in channel_input:
+                # Handle /channel/UC... format
+                channel_id = channel_input.split("/channel/")[-1]
+            else:
+                channel_id = channel_input
+        else:
+            channel_id = channel_input
+        
+        save_tracked_channel(channel_id)
         return {
+            "success": True,
             "status": "success",
-            "message": f"Channel {request.channel_id} added to tracking"
+            "message": f"Channel {channel_id} added to tracking"
         }
     except Exception as e:
         logger.error(f"Error adding channel: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @app.delete("/api/channels/{channel_id}")
 async def remove_channel(channel_id: str):
