@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Railway Start Script for Frontend v3.1
-echo "🚀 Starting YouTube Summary Bot Frontend (Railway v3.1)..."
+# Railway Start Script for Frontend v3.2 - FIXED AUTOMATION
+echo "🚀 Starting YouTube Summary Bot Frontend (Railway v3.2)..."
 echo "📊 Current directory: $(pwd)"
 echo "📊 App.py line count: $(wc -l < app.py)"
 
