@@ -342,38 +342,65 @@ def main():
         if error:
             st.error(f"❌ Cannot load channels: {error}")
         else:
-            channels = channels_data.get("channels", []) if channels_data else []
-            last_videos = channels_data.get("last_videos", {}) if channels_data else {}
+            # Handle both backend API format and local format
+            if channels_data:
+                # Backend API format
+                if "tracked_channels" in channels_data:
+                    channels = channels_data.get("tracked_channels", [])
+                    last_videos = channels_data.get("last_videos", {})
+                # Local format  
+                elif "channels" in channels_data:
+                    channels = channels_data.get("channels", [])
+                    last_videos = channels_data.get("last_videos", {})
+                else:
+                    channels = []
+                    last_videos = {}
+            else:
+                channels = []
+                last_videos = {}
             
             st.write(f"**{len(channels)} channels tracked**")
             
             # Display channels in a more efficient way
-            if channels:
+            if channels and channels != ["tracked_channels", "last_videos"]:
                 for i, channel in enumerate(channels):
+                    # Skip if channel is just a key name
+                    if channel in ["tracked_channels", "last_videos"]:
+                        continue
+                        
                     with st.container():
                         col1, col2, col3 = st.columns([4, 3, 1])
                         with col1:
                             st.write(f"**{channel}**")
                         with col2:
-                            if channel in last_videos and last_videos[channel].get('title'):
+                            if channel in last_videos and isinstance(last_videos[channel], dict) and last_videos[channel].get('title'):
                                 st.caption(f"🎥 {last_videos[channel]['title'][:50]}...")
                             else:
                                 st.caption("📭 No recent videos")
                         with col3:
                             if st.button("🗑️", key=f"remove_{i}", help="Remove channel"):
-                                # Remove channel
-                                try:
-                                    from local_functions import remove_local_channel
-                                    remove_result = remove_local_channel(channel)
-                                    if remove_result.get("status") == "success":
+                                # Remove channel - try backend first, then local
+                                with st.spinner("Removing channel..."):
+                                    # Try backend API
+                                    remove_result, remove_error = call_backend_api(f"/api/channels/{channel}", "DELETE")
+                                    
+                                    if remove_error:
+                                        # Fallback to local
+                                        try:
+                                            from local_functions import remove_local_channel
+                                            remove_result = remove_local_channel(channel)
+                                            if remove_result.get("status") == "success":
+                                                st.success("✅ Channel removed")
+                                                st.session_state.channels_data = None
+                                                st.rerun()
+                                            else:
+                                                st.error("❌ Removal failed")
+                                        except Exception as e:
+                                            st.error(f"❌ Error: {e}")
+                                    else:
                                         st.success("✅ Channel removed")
-                                        # Clear cache to force refresh
                                         st.session_state.channels_data = None
                                         st.rerun()
-                                    else:
-                                        st.error("❌ Removal failed")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
             else:
                 st.info("📭 No channels currently tracked")
             
@@ -393,19 +420,34 @@ def main():
             
             if add_btn and new_channel:
                 with st.spinner("Adding channel..."):
-                    try:
-                        from local_functions import add_local_channel
-                        add_result = add_local_channel(new_channel)
-                        
-                        if add_result.get("status") == "success":
+                    # Try backend API first
+                    add_result, add_error = call_backend_api("/api/channels/add", "POST", {
+                        "channel_input": new_channel
+                    })
+                    
+                    if add_error:
+                        # Fallback to local function
+                        try:
+                            from local_functions import add_local_channel
+                            add_result = add_local_channel(new_channel)
+                            
+                            if add_result.get("status") == "success":
+                                st.success("✅ Channel added successfully!")
+                                # Clear cache to force refresh
+                                st.session_state.channels_data = None
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Addition failed: {add_result.get('message', 'Unknown error')}")
+                        except Exception as e:
+                            st.error(f"❌ Error adding channel: {e}")
+                    else:
+                        if add_result and add_result.get("success"):
                             st.success("✅ Channel added successfully!")
                             # Clear cache to force refresh
                             st.session_state.channels_data = None
                             st.rerun()
                         else:
-                            st.error(f"❌ Addition failed: {add_result.get('message', 'Unknown error')}")
-                    except Exception as e:
-                        st.error(f"❌ Error adding channel: {e}")
+                            st.error(f"❌ Addition failed: {add_result.get('error', 'Unknown error') if add_result else 'No response'}")
     
     # Tab 3: Automation Monitoring  
     with tab3:
@@ -417,103 +459,119 @@ def main():
         try:
             backend_url = get_backend_url()
             if backend_url:
-                response = requests.get(f"{backend_url}/api/monitor/status", timeout=10)
+                response = requests.get(f"{backend_url}/api/monitor/status", timeout=15)
                 if response.status_code == 200:
-                    status_data = response.json()
-                    
-                    if status_data.get("success"):
-                        monitoring = status_data.get("monitoring", {})
+                    try:
+                        status_data = response.json()
                         
-                        # Display status in columns
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("📺 Channels Monitored", monitoring.get("channels_tracked", 0))
-                        
-                        with col2:
-                            scheduler_running = monitoring.get("scheduler_running", False)
-                            status_color = "🟢" if scheduler_running else "🔴"
-                            st.metric("🤖 Automation Status", f"{status_color} {'Running' if scheduler_running else 'Stopped'}")
-                        
-                        with col3:
-                            next_check = monitoring.get("next_check")
-                            if next_check:
-                                next_time = next_check.split("T")[1][:8] if "T" in next_check else next_check
-                                st.metric("⏰ Next Check", next_time)
-                            else:
-                                st.metric("⏰ Next Check", "Not scheduled")
-                        
-                        # Control buttons
-                        st.subheader("🎛️ Automation Controls")
-                        
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            if st.button("▶️ Start Automation", help="Start automated channel monitoring"):
-                                try:
-                                    start_response = requests.post(f"{backend_url}/api/monitor/start", timeout=10)
-                                    if start_response.status_code == 200:
-                                        st.success("✅ Automation started!")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Failed to start automation")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
-                        
-                        with col2:
-                            if st.button("⏹️ Stop Automation", help="Stop automated channel monitoring"):
-                                try:
-                                    stop_response = requests.post(f"{backend_url}/api/monitor/stop", timeout=10)
-                                    if stop_response.status_code == 200:
-                                        st.success("✅ Automation stopped!")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Failed to stop automation")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
-                        
-                        with col3:
-                            if st.button("🔄 Check Now", help="Manually trigger channel checking"):
-                                try:
-                                    with st.spinner("Checking channels..."):
-                                        check_response = requests.post(f"{backend_url}/api/monitor/check-now", timeout=60)
-                                        if check_response.status_code == 200:
-                                            st.success("✅ Manual check completed!")
+                        if status_data.get("success"):
+                            monitoring = status_data.get("monitoring", {})
+                            
+                            # Display status in columns
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric("📺 Channels Monitored", monitoring.get("channels_tracked", 0))
+                            
+                            with col2:
+                                scheduler_running = monitoring.get("scheduler_running", False)
+                                status_color = "🟢" if scheduler_running else "🔴"
+                                st.metric("🤖 Automation Status", f"{status_color} {'Running' if scheduler_running else 'Stopped'}")
+                            
+                            with col3:
+                                next_check = monitoring.get("next_check")
+                                if next_check:
+                                    next_time = next_check.split("T")[1][:8] if "T" in next_check else next_check
+                                    st.metric("⏰ Next Check", next_time)
+                                else:
+                                    st.metric("⏰ Next Check", "Not scheduled")
+                            
+                            # Control buttons
+                            st.subheader("🎛️ Automation Controls")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                if st.button("▶️ Start Automation", help="Start automated channel monitoring"):
+                                    try:
+                                        start_response = requests.post(f"{backend_url}/api/monitor/start", timeout=10)
+                                        if start_response.status_code == 200:
+                                            st.success("✅ Automation started!")
                                             st.rerun()
                                         else:
-                                            st.error("❌ Manual check failed")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
-                        
-                        # Show tracked channels
-                        st.subheader("📋 Monitored Channels")
-                        channels = monitoring.get("channels", [])
-                        if channels:
-                            for i, channel in enumerate(channels, 1):
-                                st.text(f"{i}. {channel}")
+                                            st.error("❌ Failed to start automation")
+                                    except Exception as e:
+                                        st.error(f"❌ Error: {e}")
+                            
+                            with col2:
+                                if st.button("⏹️ Stop Automation", help="Stop automated channel monitoring"):
+                                    try:
+                                        stop_response = requests.post(f"{backend_url}/api/monitor/stop", timeout=10)
+                                        if stop_response.status_code == 200:
+                                            st.success("✅ Automation stopped!")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Failed to stop automation")
+                                    except Exception as e:
+                                        st.error(f"❌ Error: {e}")
+                            
+                            with col3:
+                                if st.button("🔄 Check Now", help="Manually trigger channel checking"):
+                                    try:
+                                        with st.spinner("Checking channels..."):
+                                            check_response = requests.post(f"{backend_url}/api/monitor/check-now", timeout=60)
+                                            if check_response.status_code == 200:
+                                                st.success("✅ Manual check completed!")
+                                                st.rerun()
+                                            else:
+                                                st.error("❌ Manual check failed")
+                                    except Exception as e:
+                                        st.error(f"❌ Error: {e}")
+                            
+                            # Show tracked channels
+                            st.subheader("📋 Monitored Channels")
+                            channels = monitoring.get("channels", [])
+                            if channels:
+                                for i, channel in enumerate(channels, 1):
+                                    st.text(f"{i}. {channel}")
+                            else:
+                                st.info("No channels being monitored")
+                            
+                            # Automation info
+                            st.subheader("ℹ️ How It Works")
+                            st.markdown("""
+                            **Your bot automatically:**
+                            - 🕐 Checks all tracked channels every 30 minutes
+                            - 📡 Fetches latest videos via YouTube RSS feeds  
+                            - 📝 Extracts transcripts and generates AI summaries
+                            - 📤 Sends Discord notifications with summaries
+                            - 💾 Saves everything to your database
+                            
+                            **No manual intervention required!** Just sit back and receive automated video summaries.
+                            """)
                         else:
-                            st.info("No channels being monitored")
-                        
-                        # Automation info
-                        st.subheader("ℹ️ How It Works")
-                        st.markdown("""
-                        **Your bot automatically:**
-                        - 🕐 Checks all tracked channels every 30 minutes
-                        - 📡 Fetches latest videos via YouTube RSS feeds  
-                        - 📝 Extracts transcripts and generates AI summaries
-                        - 📤 Sends Discord notifications with summaries
-                        - 💾 Saves everything to your database
-                        
-                        **No manual intervention required!** Just sit back and receive automated video summaries.
-                        """)
-                    else:
-                        st.error("❌ Failed to get automation status")
+                            st.error("❌ Failed to get automation status")
+                            st.info("💡 The automation system may still be starting up after deployment")
+                    except ValueError:
+                        st.error("❌ Invalid response from backend")
+                        st.info("💡 Backend may still be deploying. Try refreshing in a minute.")
+                elif response.status_code == 404:
+                    st.error("❌ Automation endpoints not found")
+                    st.info("💡 Backend deployment may not include automation features yet")
                 else:
                     st.error(f"❌ Backend error: {response.status_code}")
+                    st.info("💡 Try refreshing the page or check backend logs")
             else:
                 st.error("❌ Backend URL not configured")
+        except requests.exceptions.ConnectionError:
+            st.error("❌ Cannot connect to backend")
+            st.info("💡 Backend may be deploying or temporarily unavailable")
+        except requests.exceptions.Timeout:
+            st.error("❌ Backend request timed out")
+            st.info("💡 Backend may be slow to respond during startup")
         except Exception as e:
             st.error(f"❌ Error connecting to backend: {e}")
+            st.info("💡 Check your internet connection and try again")
     
     # Tab 4: Configuration
     with tab4:
@@ -572,41 +630,82 @@ def main():
         
         if summaries_error:
             st.error(f"❌ Cannot load summaries: {summaries_error}")
+            # Try local fallback
+            try:
+                from local_functions import get_recent_summaries
+                local_summaries = get_recent_summaries()
+                if local_summaries.get("status") == "success":
+                    summaries = local_summaries.get("summaries", [])
+                    summaries_error = None
+                else:
+                    summaries = []
+            except:
+                summaries = []
         else:
-            summaries = summaries_data.get("summaries", []) if summaries_data else []
-            
-            st.subheader(f"📊 Recent Summaries ({len(summaries)})")
-            
-            if summaries:
-                for summary in summaries[-10:]:  # Show last 10
-                    with st.expander(f"📹 {summary.get('title', 'Unknown Video')}"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Channel:** {summary.get('channel', 'Unknown')}")
-                            st.write(f"**Date:** {summary.get('timestamp', 'Unknown')}")
-                        with col2:
-                            if summary.get('video_id'):
-                                st.write(f"**Video ID:** `{summary['video_id']}`")
-                        
-                        if summary.get('summary'):
-                            st.markdown("**Summary:**")
-                            st.markdown(summary['summary'])
+            # Handle different response formats
+            if summaries_data:
+                if isinstance(summaries_data, dict):
+                    summaries = summaries_data.get("summaries", [])
+                elif isinstance(summaries_data, list):
+                    summaries = summaries_data
+                else:
+                    summaries = []
             else:
-                st.info("No summaries available")
-            
-            # Manual daily report trigger
-            st.subheader("📅 Daily Report")
-            if st.button("🚀 Generate Daily Report Now"):
-                with st.spinner("Generating daily report..."):
-                    report_result, report_error = call_backend_api("/api/webhook/trigger-daily-report", "POST")
+                summaries = []
+        
+        # Filter out invalid summaries (like "None" strings)
+        valid_summaries = []
+        if summaries:
+            for summary in summaries:
+                if (isinstance(summary, dict) and 
+                    summary.get('title') and 
+                    summary.get('title') != 'None' and
+                    summary.get('summary')):
+                    valid_summaries.append(summary)
+        
+        st.subheader(f"📊 Recent Summaries ({len(valid_summaries)})")
+        
+        if valid_summaries:
+            for summary in valid_summaries[-10:]:  # Show last 10
+                with st.expander(f"📹 {summary.get('title', 'Unknown Video')}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Channel:** {summary.get('channel', 'Unknown')}")
+                        if summary.get('timestamp'):
+                            st.write(f"**Date:** {summary.get('timestamp')}")
+                        elif summary.get('created_at'):
+                            st.write(f"**Date:** {summary.get('created_at')}")
+                    with col2:
+                        if summary.get('video_id'):
+                            st.write(f"**Video ID:** `{summary['video_id']}`")
+                            youtube_url = f"https://www.youtube.com/watch?v={summary['video_id']}"
+                            st.markdown(f"**[🔗 Watch on YouTube]({youtube_url})**")
                     
-                    if report_error:
-                        st.error(f"❌ Report generation failed: {report_error}")
+                    if summary.get('summary'):
+                        st.markdown("**Summary:**")
+                        st.markdown(summary['summary'])
+        else:
+            st.info("📭 No summaries available yet")
+            st.markdown("""
+            **To generate summaries:**
+            1. Add channels in the "Channel Tracking" tab
+            2. Process videos manually in the "Process Video" tab, or
+            3. Enable automation in the "Automation" tab to process new videos automatically
+            """)
+        
+        # Manual daily report trigger
+        st.subheader("📅 Daily Report")
+        if st.button("🚀 Generate Daily Report Now"):
+            with st.spinner("Generating daily report..."):
+                report_result, report_error = call_backend_api("/api/webhook/trigger-daily-report", "POST")
+                
+                if report_error:
+                    st.error(f"❌ Report generation failed: {report_error}")
+                else:
+                    if report_result and report_result.get("success"):
+                        st.success("✅ Daily report generated and sent to Discord!")
                     else:
-                        if report_result.get("success"):
-                            st.success("✅ Daily report generated and sent to Discord!")
-                        else:
-                            st.error(f"❌ {report_result.get('error', 'Report generation failed')}")
+                        st.error(f"❌ {report_result.get('error', 'Report generation failed') if report_result else 'No response from backend'}")
 
 if __name__ == "__main__":
     main()
