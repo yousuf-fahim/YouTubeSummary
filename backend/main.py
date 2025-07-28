@@ -290,28 +290,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Startup event to initialize scheduler
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the application"""
-    logger.info("🚀 Starting YouTube Summary Bot API...")
-    
-    # Start the automated scheduler
-    start_scheduler()
-    
-    logger.info("✅ Application startup complete")
-
-# Shutdown event to cleanup scheduler
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on application shutdown"""
-    logger.info("🛑 Shutting down application...")
-    
-    # Stop the scheduler
-    stop_scheduler()
-    
-    logger.info("✅ Application shutdown complete")
-
 # Request Models
 class VideoProcessRequest(BaseModel):
     youtube_url: str
@@ -348,15 +326,60 @@ async def health_check():
 
 @app.get("/api/health")
 async def api_health_check():
-    """API health check endpoint (for frontend compatibility)"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "environment": {
-            "openai_configured": bool(OPENAI_API_KEY),
-            "discord_configured": bool(DISCORD_WEBHOOK_SUMMARIES)
+    """API health check endpoint with scheduler and automation status"""
+    global scheduler
+    
+    try:
+        # Check database connection
+        db_status = "Connected"
+        try:
+            channels_data = get_tracked_channels()
+            db_status = "Connected"
+        except Exception as e:
+            db_status = f"Error: {str(e)[:50]}"
+        
+        # Check scheduler status
+        scheduler_status = "Stopped"
+        automation_running = False
+        job_count = 0
+        
+        if scheduler:
+            if scheduler.running:
+                scheduler_status = "Running"
+                automation_running = True
+                jobs = scheduler.get_jobs()
+                job_count = len(jobs)
+            else:
+                scheduler_status = "Initialized but not running"
+        else:
+            scheduler_status = "Not initialized"
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "scheduler": {
+                "status": scheduler_status,
+                "jobs": job_count
+            },
+            "database": db_status,
+            "automation": automation_running,
+            "environment": {
+                "openai_configured": bool(OPENAI_API_KEY),
+                "discord_configured": bool(DISCORD_WEBHOOK_SUMMARIES)
+            }
         }
-    }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e),
+            "automation": False,
+            "environment": {
+                "openai_configured": bool(OPENAI_API_KEY),
+                "discord_configured": bool(DISCORD_WEBHOOK_SUMMARIES)
+            }
+        }
 
 @app.post("/api/process-video")
 async def process_video(request: VideoProcessRequest):
