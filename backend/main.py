@@ -10,8 +10,52 @@ import asyncio
 import re
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSM@app.get("/api/health")
+async def health_check():
+    """Health check endpoint with system status"""
+    global scheduler
+    
+    try:
+        # Check database connection
+        db_status = "Connected"
+        try:
+            channels_data = get_tracked_channels()
+            db_status = "Connected"
+        except Exception as e:
+            db_status = f"Error: {str(e)[:50]}"
+        
+        # Check scheduler status
+        scheduler_status = "Stopped"
+        if scheduler:
+            if scheduler.running:
+                scheduler_status = "Running"
+                jobs = scheduler.get_jobs()
+                job_count = len(jobs)
+            else:
+                scheduler_status = "Initialized but not running"
+                job_count = 0
+        else:
+            scheduler_status = "Not initialized"
+            job_count = 0
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "scheduler": {
+                "status": scheduler_status,
+                "jobs": job_count
+            },
+            "database": db_status,
+            "automation": scheduler is not None and scheduler.running
+        }
+        
+    except Exception as e:
+        logger.error(f"Health check error: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }rom pydantic import BaseModel
 import uvicorn
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,6 +82,27 @@ logger = logging.getLogger(__name__)
 
 # Global scheduler instance
 scheduler = None
+
+# App startup and shutdown events
+@app.on_event("startup")
+async def startup_event():
+    """Initialize scheduler on app startup"""
+    logger.info("🚀 Starting YouTube Summary Bot backend...")
+    try:
+        start_scheduler()
+        logger.info("✅ Backend startup complete with automation enabled")
+    except Exception as e:
+        logger.error(f"❌ Error during startup: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean shutdown"""
+    logger.info("🛑 Shutting down YouTube Summary Bot backend...")
+    try:
+        stop_scheduler()
+        logger.info("✅ Backend shutdown complete")
+    except Exception as e:
+        logger.error(f"❌ Error during shutdown: {e}")
 
 # Automated monitoring function
 async def automated_channel_monitoring():
