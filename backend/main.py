@@ -1011,9 +1011,9 @@ async def analytics_overview():
         summaries_response = supabase.table('summaries').select('id', count='exact').execute()
         total_summaries = summaries_response.count if summaries_response.count else 0
         
-        # Get channel distribution
-        channels_response = supabase.table('tracked_channels').select('channel').execute()
-        channels = [ch['channel'] for ch in channels_response.data] if channels_response.data else []
+        # Get tracked channels count
+        channels_response = supabase.table('tracked_channels').select('id', count='exact').execute()
+        tracked_channels_count = channels_response.count if channels_response.count else 0
         
         # Get recent activity (last 7 days)
         seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -1037,10 +1037,9 @@ async def analytics_overview():
             "success": True,
             "data": {
                 "total_summaries": total_summaries,
-                "tracked_channels": len(channels),
+                "tracked_channels": tracked_channels_count,
                 "recent_summaries": recent_summaries,
-                "daily_activity": daily_counts,
-                "channels": channels
+                "daily_activity": daily_counts
             }
         }
         
