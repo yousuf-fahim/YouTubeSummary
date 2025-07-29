@@ -32,6 +32,7 @@ from shared.config_service import ConfigService
 import time
 import psutil
 import gc
+import re
 from collections import defaultdict
 import tracemalloc
 from functools import wraps
@@ -467,16 +468,26 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
             logger.error(f"❌ Invalid YouTube URL: {video_url}")
             return
         
-        # Get transcript
-        transcript_data = await get_transcript(video_id)
+        # Get transcript - pass the full URL, not just video_id
+        transcript_data = await get_transcript(video_url)
         if not transcript_data:
             logger.error(f"❌ Failed to get transcript for video: {video_id}")
             return
         
+        # Get video details for title
+        title, channel = await get_video_details_from_url(video_url)
+        
+        # Prepare transcript data structure
+        transcript_info = {
+            'content': transcript_data,
+            'title': title or 'Unknown Title',
+            'channel': channel or 'Unknown Channel'
+        }
+        
         # Generate summary
         summary = await summarize_content(
-            transcript_data['content'],
-            transcript_data.get('title', 'Unknown Title'),
+            transcript_info['content'],
+            transcript_info.get('title', 'Unknown Title'),
             video_url
         )
         
@@ -484,11 +495,11 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
             logger.error(f"❌ Failed to generate summary for video: {video_id}")
             return
         
-        # **CRITICAL FIX: Save summary to database**
-        await save_summary_to_database(video_id, video_url, transcript_data, summary, channel_id)
+        # Save summary to database
+        await save_summary_to_database(video_id, video_url, transcript_info, summary, channel_id)
         
         # Send to Discord channels
-        await send_to_discord_channels(video_url, transcript_data, summary)
+        await send_to_discord_channels(video_url, transcript_info, summary)
         
         logger.info(f"✅ Successfully processed video: {video_id}")
         
@@ -496,6 +507,20 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
         logger.error(f"❌ Error processing video {video_url}: {str(e)}")
         # Re-raise the exception to see it in logs
         raise e
+
+async def get_video_details_from_url(video_url: str):
+    """Get video title and channel from URL"""
+    try:
+        video_id = extract_video_id(video_url)
+        if not video_id:
+            return "Unknown Title", "Unknown Channel"
+        
+        # Use the function from shared.transcript
+        from shared.transcript import get_video_details
+        return await get_video_details(video_id)
+    except Exception as e:
+        logger.warning(f"Could not get video details: {e}")
+        return "Unknown Title", "Unknown Channel"
 
 async def save_summary_to_database(video_id: str, video_url: str, transcript_data: dict, summary: str, channel_id: Optional[str] = None):
     """Save processed video summary to database."""
