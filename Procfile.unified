@@ -1,0 +1,4 @@
+# Heroku Unified Deployment - Frontend + Backend
+# This Procfile runs both Streamlit frontend and FastAPI backend in one app
+
+web: python unified_app.py
