@@ -306,34 +306,45 @@ async def save_summary_to_database(video_id: str, video_url: str, transcript_dat
     try:
         from shared.supabase_utils import save_summary
         
-        # Prepare summary data
-        summary_data = {
-            "video_id": video_id,
-            "video_url": video_url,
-            "title": transcript_data.get('title', 'Unknown Title'),
-            "channel": transcript_data.get('channel', 'Unknown Channel'),
-            "channel_id": channel_id,
-            "summary": summary,
-            "transcript_length": len(transcript_data.get('content', '')),
-            "processed_at": datetime.now(timezone.utc).isoformat()
-        }
+        # Use the correct function signature
+        result = save_summary(
+            video_id=video_id,
+            summary_text=summary,
+            title=transcript_data.get('title', 'Unknown Title'),
+            video_url=video_url
+        )
         
-        # Try to save to Supabase
-        supabase = get_supabase_client()
-        if supabase:
-            try:
-                save_summary(video_id, summary, transcript_data.get('title', 'Unknown Title'), video_url)
-                logger.info(f"💾 Summary saved to Supabase for video: {video_id}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to save summary to Supabase: {e}")
-                # Fallback to local storage
-                await save_summary_locally(summary_data)
-        else:
-            # No Supabase, save locally
-            await save_summary_locally(summary_data)
-            
+        logger.info(f"✅ Saved summary to database for video: {video_id}")
+        return result
+        
     except Exception as e:
-        logger.error(f"❌ Error saving summary to database: {str(e)}")
+        logger.error(f"❌ Failed to save summary to database for {video_id}: {str(e)}")
+        # Save to local fallback
+        try:
+            import json
+            fallback_data = {
+                "video_id": video_id,
+                "video_url": video_url,
+                "title": transcript_data.get('title', 'Unknown Title'),
+                "summary": summary,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+                "error": "Database save failed, using local fallback"
+            }
+            
+            # Ensure data directory exists
+            os.makedirs("shared/data", exist_ok=True)
+            
+            # Save to local file
+            fallback_file = f"shared/data/summary_{video_id}_{int(datetime.now().timestamp())}.json"
+            with open(fallback_file, 'w', encoding='utf-8') as f:
+                json.dump(fallback_data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"💾 Saved summary to local fallback: {fallback_file}")
+            
+        except Exception as fallback_error:
+            logger.error(f"❌ Even fallback save failed for {video_id}: {str(fallback_error)}")
+        
+        return None
 
 async def save_summary_locally(summary_data: dict):
     """Save summary to local JSON file as fallback."""
@@ -584,31 +595,43 @@ async def list_channels():
         logger.error(f"❌ Error listing channels: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/monitoring/status", response_model=MonitoringResponse)
+@app.get("/monitoring/status")
 async def monitoring_status():
-    """Get monitoring status."""
+    """Get detailed monitoring status including scheduler information."""
     global tracker, scheduler
     
     try:
         channels_count = 0
-        last_check = None
+        next_monitoring_check = None
+        next_daily_report = None
+        scheduler_running = False
         
         if tracker:
             channels = tracker.get_tracked_channels()
             channels_count = len(channels)
         
-        if scheduler and scheduler.running:
-            # Get last execution time of monitoring job
-            job = scheduler.get_job('channel_monitoring')
-            if job and hasattr(job, 'next_run_time'):
-                last_check = job.next_run_time.isoformat() if job.next_run_time else None
+        if scheduler:
+            scheduler_running = scheduler.running
+            
+            # Get next execution times for both jobs
+            monitoring_job = scheduler.get_job('channel_monitoring')
+            if monitoring_job and hasattr(monitoring_job, 'next_run_time'):
+                next_monitoring_check = monitoring_job.next_run_time.isoformat() if monitoring_job.next_run_time else None
+            
+            report_job = scheduler.get_job('daily_report')
+            if report_job and hasattr(report_job, 'next_run_time'):
+                next_daily_report = report_job.next_run_time.isoformat() if report_job.next_run_time else None
         
-        return MonitoringResponse(
-            success=True,
-            message="Monitoring system operational",
-            channels_count=channels_count,
-            last_check=last_check
-        )
+        return {
+            "success": True,
+            "message": "Monitoring system operational" if scheduler_running else "Scheduler not running",
+            "scheduler_running": scheduler_running,
+            "channels_count": channels_count,
+            "next_monitoring_check": next_monitoring_check,
+            "next_daily_report": next_daily_report,
+            "monitoring_interval": "Every 30 minutes",
+            "report_time": "Daily at 18:00 CEST"
+        }
         
     except Exception as e:
         logger.error(f"❌ Error getting monitoring status: {str(e)}")
