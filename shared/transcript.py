@@ -120,34 +120,11 @@ async def get_transcript(youtube_url):
         print(f"Transcript found in Supabase for video ID: {video_id}")
         return existing_transcript.get("transcript_text")
     
-    # If transcript doesn't exist in Supabase, extract it and store it
-    error_reasons = []
-    
-    # First try: official YouTube API
+    # First try: Tactiq (works best with cloud IPs)
     try:
-        transcript = _get_transcript_from_api(video_id)
-        if transcript:
-            print("Successfully retrieved transcript from YouTube API")
-            # Get video details (title and channel)
-            title, channel = await get_video_details(video_id)
-            # Save to Supabase
-            save_supabase_transcript(video_id, transcript, title, channel)
-            # Save to local file
-            save_transcript_to_local_file(video_id, transcript, title, channel)
-            return transcript
-    except _errors.NoTranscriptFound as e:
-        error_reasons.append(f"No transcript available: {str(e)}")
-    except _errors.TranscriptsDisabled as e:
-        error_reasons.append(f"Transcripts disabled for this video: {str(e)}")
-    except _errors.VideoUnavailable as e:
-        error_reasons.append(f"Video is unavailable or private: {str(e)}")
-    except Exception as e:
-        error_reasons.append(f"YouTube API error: {str(e)}")
-    
-    # Second try: Tactiq
-    try:
+        print("Trying Tactiq API...")
         transcript = await _get_transcript_from_tactiq(video_id)
-        if transcript:
+        if transcript and len(transcript.strip()) > 50:  # Make sure we got substantial content
             print("Successfully retrieved transcript from Tactiq")
             # Get video details (title and channel)
             title, channel = await get_video_details(video_id)
@@ -156,15 +133,17 @@ async def get_transcript(youtube_url):
             # Save to local file
             save_transcript_to_local_file(video_id, transcript, title, channel)
             return transcript
+        else:
+            print("Tactiq returned empty or short transcript")
     except Exception as e:
-        error_reasons.append(f"Tactiq API error: {str(e)}")
+        print(f"Tactiq API error: {e}")
     
-    # Third try: YouTube Transcript API with all languages
+    # Second try: YouTube Transcript API (fallback)
     try:
-        print("Trying to get transcript in any available language...")
+        print("Trying YouTube Transcript API...")
         transcript = _get_transcript_any_language(video_id)
-        if transcript:
-            print("Successfully retrieved transcript in alternative language")
+        if transcript and len(transcript.strip()) > 50:
+            print("Successfully retrieved transcript from YouTube API")
             # Get video details (title and channel)
             title, channel = await get_video_details(video_id)
             # Save to Supabase
@@ -173,18 +152,14 @@ async def get_transcript(youtube_url):
             save_transcript_to_local_file(video_id, transcript, title, channel)
             return transcript
     except Exception as e:
-        error_reasons.append(f"Failed to get transcript in any language: {str(e)}")
+        print(f"YouTube API error: {e}")
     
-    # Log all error reasons for debugging
     print(f"Failed to get transcript for video {video_id}")
-    for reason in error_reasons:
-        print(f"  - {reason}")
-    
     return None
 
 def _get_transcript_any_language(video_id):
     """
-    Get transcript in any available language
+    Simple fallback using YouTube Transcript API
     
     Args:
         video_id (str): YouTube video ID
@@ -193,41 +168,30 @@ def _get_transcript_any_language(video_id):
         str: The transcript text or None if not found
     """
     try:
-        # Get list of available transcripts
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        
-        # First try manually created transcripts in any language
-        for transcript in transcript_list:
-            try:
-                if not transcript.is_generated:
-                    # Get the manually created transcript
-                    fetched = transcript.fetch()
-                    formatter = TextFormatter()
-                    return formatter.format_transcript(fetched)
-            except:
-                continue
-        
-        # Then try auto-generated transcripts
-        for transcript in transcript_list:
-            try:
-                if transcript.is_generated:
-                    # Get the auto-generated transcript
-                    fetched = transcript.fetch()
-                    formatter = TextFormatter()
-                    return formatter.format_transcript(fetched)
-            except:
-                continue
-                
-        # If nothing worked, return None
-        return None
-        
+        # Try simple approach first
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        formatter = TextFormatter()
+        return formatter.format_transcript(transcript_list)
     except Exception as e:
-        print(f"Error getting transcripts in any language: {e}")
-        return None
+        try:
+            # Try with common language codes
+            for lang in ['en', 'en-US', 'en-GB', 'auto']:
+                try:
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang])
+                    formatter = TextFormatter()
+                    result = formatter.format_transcript(transcript_list)
+                    if result and len(result.strip()) > 20:
+                        return result
+                except:
+                    continue
+        except Exception as e2:
+            print(f"YouTube Transcript API failed: {e2}")
+    
+    return None
 
 async def _get_transcript_from_tactiq(video_id):
     """
-    Get transcript from Tactiq API
+    Get transcript from Tactiq API (like the web tool)
     
     Args:
         video_id (str): YouTube video ID
@@ -235,72 +199,82 @@ async def _get_transcript_from_tactiq(video_id):
     Returns:
         str: The transcript text or None if not found
     """
-    # Construct the request
-    url = f"https://tactiq.io/api/youtube/transcript?videoId={video_id}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Referer": "https://tactiq.io/tools/youtube-transcript",
-        "Accept": "application/json"
-    }
-    
     try:
+        # Use the same endpoint as the Tactiq web tool
+        url = f"https://tactiq.io/api/youtube/transcript?videoId={video_id}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Referer": "https://tactiq.io/tools/youtube-transcript",
+            "Accept": "application/json",
+            "Origin": "https://tactiq.io"
+        }
+        
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, timeout=30) as response:
                 print(f"Tactiq API returned status code: {response.status}")
                 
                 if response.status == 200:
                     result = await response.json()
                     
-                    # Format the transcript text from the Tactiq response
-                    if isinstance(result, list) and len(result) > 0:
-                        transcript_text = ""
+                    # Handle different response formats from Tactiq
+                    transcript_text = ""
+                    
+                    if isinstance(result, dict):
+                        # If result is a dict, look for transcript data
+                        if "transcript" in result:
+                            transcript_text = result["transcript"]
+                        elif "text" in result:
+                            transcript_text = result["text"]
+                        elif "segments" in result:
+                            # Handle segmented transcript
+                            for segment in result["segments"]:
+                                if "text" in segment:
+                                    transcript_text += segment["text"] + " "
+                        else:
+                            # Try to extract any text fields
+                            for key, value in result.items():
+                                if isinstance(value, str) and len(value) > 20:
+                                    transcript_text += value + " "
+                    
+                    elif isinstance(result, list):
+                        # If result is a list of segments
                         for segment in result:
-                            if "text" in segment:
+                            if isinstance(segment, dict) and "text" in segment:
                                 transcript_text += segment["text"] + " "
-                        
-                        return transcript_text.strip()
-                
-                return None
+                            elif isinstance(segment, str):
+                                transcript_text += segment + " "
+                    
+                    elif isinstance(result, str):
+                        # If result is directly a string
+                        transcript_text = result
+                    
+                    # Clean up and return
+                    transcript_text = transcript_text.strip()
+                    if len(transcript_text) > 20:  # Make sure we got substantial content
+                        print(f"Tactiq returned {len(transcript_text)} characters")
+                        return transcript_text
+                    else:
+                        print(f"Tactiq returned too short content: {len(transcript_text)} characters")
+                        return None
+                else:
+                    error_text = await response.text()
+                    print(f"Tactiq API error {response.status}: {error_text}")
+                    return None
+                    
     except Exception as e:
         print(f"Error in Tactiq API request: {e}")
         return None
 
 def _get_transcript_from_api(video_id):
     """
-    Get transcript using youtube_transcript_api
-    
-    Args:
-        video_id (str): YouTube video ID
-        
-    Returns:
-        str: The transcript text or None if not found
+    Simple fallback using YouTube Transcript API directly
     """
     try:
-        # Get transcript data using new API
-        api = YouTubeTranscriptApi()
-        fetched_transcript = api.fetch(video_id, languages=['en', 'en-US'])
-        
-        # Extract text from snippets
-        transcript_parts = []
-        for snippet in fetched_transcript.snippets:
-            if hasattr(snippet, 'text') and snippet.text:
-                text = snippet.text.strip()
-                if text:
-                    transcript_parts.append(text)
-        
-        if not transcript_parts:
-            raise ValueError("No text found in transcript snippets")
-        
-        # Join all parts with spaces
-        full_transcript = ' '.join(transcript_parts)
-        
-        if len(full_transcript.strip()) > 0:
-            return full_transcript
-        else:
-            raise ValueError("Empty transcript after processing")
-            
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        formatter = TextFormatter()
+        return formatter.format_transcript(transcript_list)
     except Exception as e:
         print(f"YouTube API transcript error: {e}")
         raise
