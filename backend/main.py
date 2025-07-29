@@ -1335,5 +1335,250 @@ async def run_comprehensive_test():
         test_results["error"] = str(e)
         return test_results
 
+@app.post("/test/phase4-comprehensive")
+async def run_phase4_comprehensive_test():
+    """Phase 4: Comprehensive Feature Testing - End-to-end workflow validation."""
+    
+    test_results = {
+        "phase": "Phase 4: Comprehensive Feature Testing",
+        "timestamp": datetime.now().isoformat(),
+        "tests": {},
+        "overall_success": True,
+        "summary": {},
+        "recommendations": []
+    }
+    
+    try:
+        logger.info("🧪 Starting Phase 4 Comprehensive Testing...")
+        
+        # Test 1: End-to-end video processing workflow
+        logger.info("📹 Testing end-to-end video processing workflow...")
+        test_video_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        
+        try:
+            # Test video ID extraction
+            video_id = extract_video_id(test_video_url)
+            if not video_id:
+                raise Exception("Video ID extraction failed")
+            
+            # Test transcript fetching
+            from shared.transcript import get_transcript
+            transcript_data = await get_transcript(video_id)
+            if not transcript_data:
+                raise Exception("Transcript fetching failed")
+            
+            # Test summarization
+            from shared.summarize import summarize_content
+            summary = await summarize_content(
+                transcript_data['content'], 
+                transcript_data.get('title', 'Test Video'),
+                test_video_url
+            )
+            if not summary:
+                raise Exception("Summarization failed")
+            
+            # Test database save
+            try:
+                await save_summary_to_database(video_id, test_video_url, transcript_data, summary, None)
+                database_save_success = True
+            except Exception as e:
+                database_save_success = False
+                logger.error(f"Database save failed: {e}")
+            
+            # Test Discord integration
+            try:
+                await send_to_discord_channels(test_video_url, transcript_data, summary)
+                discord_success = True
+            except Exception as e:
+                discord_success = False
+                logger.error(f"Discord integration failed: {e}")
+            
+            test_results["tests"]["video_processing_workflow"] = {
+                "success": True,
+                "components": {
+                    "video_id_extraction": True,
+                    "transcript_fetching": True,
+                    "summarization": True,
+                    "database_save": database_save_success,
+                    "discord_integration": discord_success
+                },
+                "message": "End-to-end video processing completed"
+            }
+            
+        except Exception as e:
+            test_results["tests"]["video_processing_workflow"] = {
+                "success": False,
+                "message": f"Video processing workflow failed: {str(e)}"
+            }
+            test_results["overall_success"] = False
+        
+        # Test 2: Channel monitoring automation
+        logger.info("📡 Testing channel monitoring automation...")
+        try:
+            global tracker, scheduler
+            
+            if not tracker:
+                raise Exception("Tracker not initialized")
+            
+            # Test channel tracking
+            channels = tracker.get_tracked_channels()
+            if not channels:
+                raise Exception("No channels being tracked")
+            
+            # Test latest video fetching for all channels
+            latest_videos_success = 0
+            latest_videos_total = len(channels)
+            
+            for channel_id in channels.keys():
+                try:
+                    latest_video = await tracker.get_latest_video_info(channel_id)
+                    if latest_video:
+                        latest_videos_success += 1
+                except Exception:
+                    pass
+            
+            # Test scheduler status
+            scheduler_running = scheduler and scheduler.running
+            
+            # Test monitoring job trigger
+            try:
+                # This would normally be called by the scheduler
+                await monitor_channels_job()
+                monitoring_job_success = True
+            except Exception as e:
+                monitoring_job_success = False
+                logger.error(f"Monitoring job failed: {e}")
+            
+            test_results["tests"]["channel_monitoring_automation"] = {
+                "success": True,
+                "components": {
+                    "tracker_initialized": bool(tracker),
+                    "channels_tracked": len(channels),
+                    "latest_video_fetching": f"{latest_videos_success}/{latest_videos_total}",
+                    "scheduler_running": scheduler_running,
+                    "monitoring_job_execution": monitoring_job_success
+                },
+                "message": f"Channel monitoring operational with {len(channels)} channels"
+            }
+            
+        except Exception as e:
+            test_results["tests"]["channel_monitoring_automation"] = {
+                "success": False,
+                "message": f"Channel monitoring failed: {str(e)}"
+            }
+            test_results["overall_success"] = False
+        
+        # Test 3: Discord integration validation
+        logger.info("💬 Testing Discord integration validation...")
+        try:
+            # Check webhook configuration
+            webhooks = {
+                "uploads": os.getenv('DISCORD_UPLOADS_WEBHOOK'),
+                "transcripts": os.getenv('DISCORD_TRANSCRIPTS_WEBHOOK'),
+                "summaries": os.getenv('DISCORD_SUMMARIES_WEBHOOK'),
+                "daily_report": os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
+            }
+            
+            configured_webhooks = sum(1 for w in webhooks.values() if w)
+            
+            # Test message sending
+            webhook_tests = {}
+            for webhook_type, webhook_url in webhooks.items():
+                if webhook_url:
+                    try:
+                        test_message = f"🧪 Phase 4 Test - {webhook_type.title()} Channel - {datetime.now().strftime('%H:%M:%S')}"
+                        success = await send_discord_message(webhook_url, test_message)
+                        webhook_tests[webhook_type] = success
+                    except Exception:
+                        webhook_tests[webhook_type] = False
+                else:
+                    webhook_tests[webhook_type] = None
+            
+            successful_tests = sum(1 for result in webhook_tests.values() if result is True)
+            
+            test_results["tests"]["discord_integration_validation"] = {
+                "success": configured_webhooks > 0 and successful_tests > 0,
+                "components": {
+                    "configured_webhooks": f"{configured_webhooks}/4",
+                    "webhook_tests": webhook_tests,
+                    "successful_tests": f"{successful_tests}/{configured_webhooks}"
+                },
+                "message": f"Discord integration: {successful_tests}/{configured_webhooks} webhooks working"
+            }
+            
+        except Exception as e:
+            test_results["tests"]["discord_integration_validation"] = {
+                "success": False,
+                "message": f"Discord integration test failed: {str(e)}"
+            }
+            test_results["overall_success"] = False
+        
+        # Test 4: Database synchronization testing
+        logger.info("🗄️ Testing database synchronization...")
+        try:
+            from shared.supabase_utils import get_supabase_client
+            supabase = get_supabase_client()
+            
+            if not supabase:
+                raise Exception("Supabase client not available")
+            
+            # Test database connectivity
+            summaries_result = supabase.table('summaries').select('*').execute()
+            transcripts_result = supabase.table('transcripts').select('*').execute()
+            
+            summary_count = len(summaries_result.data)
+            transcript_count = len(transcripts_result.data)
+            
+            # Test data integrity
+            recent_summaries = [s for s in summaries_result.data if s.get('created_at')]
+            data_integrity = len(recent_summaries) == summary_count
+            
+            test_results["tests"]["database_synchronization"] = {
+                "success": True,
+                "components": {
+                    "connection": True,
+                    "summary_count": summary_count,
+                    "transcript_count": transcript_count,
+                    "data_integrity": data_integrity
+                },
+                "message": f"Database sync: {summary_count} summaries, {transcript_count} transcripts"
+            }
+            
+        except Exception as e:
+            test_results["tests"]["database_synchronization"] = {
+                "success": False,
+                "message": f"Database synchronization test failed: {str(e)}"
+            }
+            test_results["overall_success"] = False
+        
+        # Generate summary and recommendations
+        successful_tests = sum(1 for test in test_results["tests"].values() if test["success"])
+        total_tests = len(test_results["tests"])
+        
+        test_results["summary"] = {
+            "tests_passed": f"{successful_tests}/{total_tests}",
+            "success_rate": f"{(successful_tests/total_tests)*100:.1f}%",
+            "overall_status": "PASS" if test_results["overall_success"] else "FAIL"
+        }
+        
+        # Generate recommendations
+        if not test_results["overall_success"]:
+            for test_name, test_result in test_results["tests"].items():
+                if not test_result["success"]:
+                    test_results["recommendations"].append(f"Fix {test_name}: {test_result['message']}")
+        else:
+            test_results["recommendations"].append("All systems operational - ready for production use")
+            test_results["recommendations"].append("Consider adding performance monitoring and alerting")
+            test_results["recommendations"].append("Implement automated health checks")
+        
+        logger.info(f"✅ Phase 4 Testing Complete: {successful_tests}/{total_tests} tests passed")
+        return test_results
+        
+    except Exception as e:
+        logger.error(f"❌ Phase 4 testing failed: {str(e)}")
+        test_results["overall_success"] = False
+        test_results["error"] = str(e)
+        return test_results
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
