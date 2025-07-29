@@ -855,16 +855,18 @@ async def get_analytics():
             avg_summary_length = total_length / len(summaries)
         
         # Get tracked channels count
-        config = ConfigService()
-        tracked_channels = config.load_config().get('tracked_channels', {})
-        
+        global tracker
+        tracked_channels_count = 0
+        if tracker:
+            tracked_channels = tracker.get_tracked_channels()
+            tracked_channels_count = len(tracked_channels)
         return {
             "success": True,
             "analytics": {
                 "overview": {
                     "total_summaries": total_summaries,
                     "total_transcripts": total_transcripts,
-                    "tracked_channels": len(tracked_channels),
+                    "tracked_channels": tracked_channels_count,
                     "avg_summary_length": round(avg_summary_length, 2)
                 },
                 "recent_activity": {
