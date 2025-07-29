@@ -108,38 +108,38 @@ def call_backend_api(endpoint, method="GET", data=None):
 def handle_local_fallback(endpoint, method, data):
     """Handle API calls with local functions"""
     try:
-        if endpoint == "/api/manual-summary" and method == "POST":
+        if endpoint == "/process" and method == "POST":
             if data and data.get("youtube_url"):
                 result = test_video_processing(data["youtube_url"])
                 return result, None
         
-        elif endpoint == "/api/channels" and method == "GET":
+        elif endpoint == "/channels" and method == "GET":
             result = get_local_channels()
             return result, None
         
-        elif endpoint == "/api/channels/add" and method == "POST":
+        elif endpoint == "/channels/add" and method == "POST":
             if data and data.get("channel_input"):
                 result = add_local_channel(data["channel_input"])
                 return result, None
         
-        elif endpoint.startswith("/api/channels/") and method == "DELETE":
+        elif endpoint.startswith("/channels/") and method == "DELETE":
             channel_id = endpoint.split("/")[-1]
             result = remove_local_channel(channel_id)
             return result, None
         
-        elif endpoint == "/api/config" and method == "GET":
+        elif endpoint == "/config" and method == "GET":
             result = get_local_config()
             return result, None
         
-        elif endpoint == "/api/test" and method == "POST":
+        elif endpoint == "/test" and method == "POST":
             result = test_discord_webhook()
             return result, None
         
-        elif endpoint == "/api/webhook/trigger-daily-report" and method == "POST":
+        elif endpoint == "/reports/trigger" and method == "POST":
             result = trigger_daily_report()
             return result, None
         
-        elif endpoint == "/api/summaries" and method == "GET":
+        elif endpoint == "/summaries" and method == "GET":
             result = get_recent_summaries()
             return result, None
         
@@ -163,7 +163,7 @@ def main():
         
         if backend_url:
             try:
-                response = requests.get(f"{backend_url}/api/health", timeout=5)
+                response = requests.get(f"{backend_url}/health", timeout=5)
                 if response.status_code == 200:
                     st.success("✅ Backend Online")
                     st.info("🌐 Production Mode")
@@ -265,7 +265,7 @@ def main():
                 
                 with st.spinner("Processing video... This may take a few minutes."):
                     # Call backend API for manual summary
-                    result, error = call_backend_api("/api/manual-summary", "POST", {
+                    result, error = call_backend_api("/process", "POST", {
                         "youtube_url": youtube_url
                     })
                     
@@ -323,7 +323,7 @@ def main():
         if should_refresh:
             with st.spinner("Loading channels..."):
                 # Try backend API
-                channels_data, error = call_backend_api("/api/channels")
+                channels_data, error = call_backend_api("/channels")
                 
                 if error:
                     # Fallback to local function
@@ -447,7 +447,7 @@ def main():
                         with col3:
                             if st.button("🗑️", key=f"remove_{start_idx + i}", help="Remove channel", use_container_width=True):
                                 with st.spinner("Removing..."):
-                                    remove_result, remove_error = call_backend_api(f"/api/channels/{channel}", "DELETE")
+                                    remove_result, remove_error = call_backend_api(f"/channels/remove", "POST", {"channel_id": channel})
                                     
                                     if remove_error:
                                         try:
@@ -483,7 +483,7 @@ def main():
                 
                 if submitted and new_channel:
                     with st.spinner("Adding channel..."):
-                        add_result, add_error = call_backend_api("/api/channels/add", "POST", {
+                        add_result, add_error = call_backend_api("/channels/add", "POST", {
                             "channel_input": new_channel
                         })
                         
@@ -519,7 +519,7 @@ def main():
         try:
             backend_url = get_backend_url()
             if backend_url:
-                response = requests.get(f"{backend_url}/api/monitor/status", timeout=15)
+                response = requests.get(f"{backend_url}/monitoring/status", timeout=15)
                 if response.status_code == 200:
                     try:
                         status_data = response.json()
@@ -533,7 +533,7 @@ def main():
                             # Get channel count from channels API
                             channel_count = 0
                             try:
-                                channels_response = requests.get(f"{backend_url}/api/channels", timeout=5)
+                                channels_response = requests.get(f"{backend_url}/channels", timeout=5)
                                 if channels_response.status_code == 200:
                                     channels_data = channels_response.json()
                                     if "channels" in channels_data and isinstance(channels_data["channels"], dict):
@@ -574,7 +574,7 @@ def main():
                             with col1:
                                 if st.button("▶️ Start Automation", help="Start automated channel monitoring"):
                                     try:
-                                        start_response = requests.post(f"{backend_url}/api/monitor/start", timeout=10)
+                                        start_response = requests.post(f"{backend_url}/monitoring/trigger", timeout=10)
                                         if start_response.status_code == 200:
                                             st.success("✅ Automation started!")
                                             st.rerun()
@@ -586,7 +586,7 @@ def main():
                             with col2:
                                 if st.button("⏹️ Stop Automation", help="Stop automated channel monitoring"):
                                     try:
-                                        stop_response = requests.post(f"{backend_url}/api/monitor/stop", timeout=10)
+                                        stop_response = requests.post(f"{backend_url}/monitoring/trigger", timeout=10)
                                         if stop_response.status_code == 200:
                                             st.success("✅ Automation stopped!")
                                             st.rerun()
@@ -599,7 +599,7 @@ def main():
                                 if st.button("🔄 Check Now", help="Manually trigger channel checking"):
                                     try:
                                         with st.spinner("Checking channels..."):
-                                            check_response = requests.post(f"{backend_url}/api/monitor/check-now", timeout=60)
+                                            check_response = requests.post(f"{backend_url}/monitoring/trigger", timeout=60)
                                             if check_response.status_code == 200:
                                                 st.success("✅ Manual check completed!")
                                                 st.rerun()
@@ -614,7 +614,7 @@ def main():
                             # Get the actual tracked channels from the channels API
                             tracked_channels = []
                             try:
-                                channels_response = requests.get(f"{backend_url}/api/channels", timeout=5)
+                                channels_response = requests.get(f"{backend_url}/channels", timeout=5)
                                 if channels_response.status_code == 200:
                                     channels_data = channels_response.json()
                                     if "channels" in channels_data and isinstance(channels_data["channels"], dict):
@@ -677,7 +677,7 @@ def main():
         st.info("🔒 **Security Notice**: Configuration is now handled via environment variables for better security.")
         
         # Show current configuration status
-        config_data, config_error = call_backend_api("/api/config")
+        config_data, config_error = call_backend_api("/config")
         
         if config_error:
             st.error(f"❌ Cannot load configuration: {config_error}")
@@ -706,7 +706,7 @@ def main():
             # Test webhook button
             st.subheader("🧪 Test Discord Webhook")
             if st.button("Send Test Message"):
-                test_result, test_error = call_backend_api("/api/test", "POST", {
+                test_result, test_error = call_backend_api("/test", "POST", {
                     "message": "Test message from YouTube Summary Bot frontend"
                 })
                 

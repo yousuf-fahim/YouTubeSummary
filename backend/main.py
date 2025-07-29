@@ -6,8 +6,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import json
 
-# Add the parent directory to the path to import shared modules
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# Add paths to import shared modules (works both locally and on Heroku)
+current_dir = os.path.dirname(__file__)
+parent_dir = os.path.join(current_dir, '..')
+sys.path.append(current_dir)  # For Heroku deployment (shared in same directory)
+sys.path.append(parent_dir)   # For local development (shared in parent directory)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware

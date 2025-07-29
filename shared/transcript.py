@@ -45,7 +45,10 @@ def save_transcript_to_local_file(video_id, transcript, title, channel):
             f.write(f"Video Title: {title}\n")
             f.write(f"Channel: {channel}\n")
             f.write(f"Video ID: {video_id}\n")
-            f.write(f"Extracted: {re.sub(r'\\.[0-9]+', '', str(os.path.getctime(filepath)) if os.path.exists(filepath) else 'Now')}\n")
+            # Fix f-string with backslash issue
+            timestamp = str(os.path.getctime(filepath)) if os.path.exists(filepath) else 'Now'
+            cleaned_timestamp = re.sub(r'\.[0-9]+', '', timestamp)
+            f.write(f"Extracted: {cleaned_timestamp}\n")
             f.write("=" * 50 + "\n\n")
             f.write(transcript)
         
