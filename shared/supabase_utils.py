@@ -60,15 +60,23 @@ def get_transcript(video_id: str) -> Optional[Dict]:
         return None
 
 # Summary operations
-def save_summary(video_id: str, summary_text: str) -> Dict:
-    """Save summary to Supabase."""
+def save_summary(video_id: str, summary_text: str, title: str = None, video_url: str = None) -> Dict:
+    """Save summary to Supabase with enhanced data."""
     try:
         client = get_supabase_client()
-        response = client.table("summaries").insert({
+        
+        # Prepare summary data
+        summary_data = {
             "video_id": video_id,
             "summary_text": summary_text,
             "created_at": "now()"
-        }).execute()
+        }
+        
+        # Add optional fields if provided
+        if title:
+            summary_data["title"] = title
+        
+        response = client.table("summaries").insert(summary_data).execute()
         return response.data[0]
     except Exception as e:
         print(f"Error saving summary: {e}")
