@@ -310,13 +310,19 @@ def main():
         with col3:
             auto_refresh = st.checkbox("Auto-refresh", value=False)
         
-        # Load channels data (with caching)
-        if (st.session_state.channels_data is None or 
+        # Load channels data with improved caching and refresh logic
+        should_refresh = (
+            st.session_state.channels_data is None or 
             refresh_btn or 
-            (auto_refresh and st.session_state.last_refresh is None)):
-            
+            (auto_refresh and (
+                st.session_state.last_refresh is None or 
+                time.time() - st.session_state.last_refresh > 300  # 5 minutes
+            ))
+        )
+        
+        if should_refresh:
             with st.spinner("Loading channels..."):
-                # Try backend first, fallback to local
+                # Try backend API
                 channels_data, error = call_backend_api("/api/channels")
                 
                 if error:
@@ -326,8 +332,10 @@ def main():
                         local_result = get_local_channels()
                         if local_result.get("status") == "success":
                             channels_data = {
-                                "channels": local_result.get("channels", []),
-                                "last_videos": local_result.get("last_videos", {})
+                                "channels": {
+                                    "tracked_channels": local_result.get("channels", []),
+                                    "last_videos": local_result.get("last_videos", {})
+                                }
                             }
                             error = None
                     except Exception as e:
@@ -342,50 +350,106 @@ def main():
         if error:
             st.error(f"❌ Cannot load channels: {error}")
         else:
-            # Handle both backend API format and local format
+            # Parse channel data with improved error handling
+            channels = []
+            last_videos = {}
+            
             if channels_data:
-                # Backend API format
-                if "tracked_channels" in channels_data:
+                # Handle different API response formats
+                if "channels" in channels_data and isinstance(channels_data["channels"], dict):
+                    # New nested format: {"channels": {"tracked_channels": [...], "last_videos": {...}}}
+                    api_channels = channels_data["channels"]
+                    channels = api_channels.get("tracked_channels", [])
+                    last_videos = api_channels.get("last_videos", {})
+                elif "tracked_channels" in channels_data:
+                    # Direct format: {"tracked_channels": [...], "last_videos": {...}}
                     channels = channels_data.get("tracked_channels", [])
                     last_videos = channels_data.get("last_videos", {})
-                # Local format  
-                elif "channels" in channels_data:
+                elif isinstance(channels_data.get("channels"), list):
+                    # Local format with list
                     channels = channels_data.get("channels", [])
                     last_videos = channels_data.get("last_videos", {})
-                else:
-                    channels = []
-                    last_videos = {}
+            
+            # Clean and validate channel data
+            if isinstance(channels, list):
+                channels = [
+                    ch for ch in channels 
+                    if ch and isinstance(ch, str) and ch not in ["tracked_channels", "last_videos"]
+                ]
             else:
                 channels = []
-                last_videos = {}
             
-            st.write(f"**{len(channels)} channels tracked**")
+            # Display channel count and last refresh time
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.write(f"**{len(channels)} channels tracked**")
+            with col2:
+                if st.session_state.last_refresh:
+                    refresh_time = datetime.fromtimestamp(st.session_state.last_refresh).strftime("%H:%M:%S")
+                    st.caption(f"Last updated: {refresh_time}")
             
-            # Display channels in a more efficient way
-            if channels and channels != ["tracked_channels", "last_videos"]:
-                for i, channel in enumerate(channels):
-                    # Skip if channel is just a key name
-                    if channel in ["tracked_channels", "last_videos"]:
-                        continue
-                        
+            # Display channels with improved UI
+            if channels:
+                # Pagination settings
+                if 'channel_page' not in st.session_state:
+                    st.session_state.channel_page = 0
+                
+                channels_per_page = 5
+                total_pages = (len(channels) - 1) // channels_per_page + 1
+                start_idx = st.session_state.channel_page * channels_per_page
+                end_idx = start_idx + channels_per_page
+                current_channels = channels[start_idx:end_idx]
+                
+                # Pagination controls (only show if more than 1 page)
+                if total_pages > 1:
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    
+                    with col1:
+                        if st.button("⬅️ Previous", disabled=st.session_state.channel_page == 0, use_container_width=True):
+                            st.session_state.channel_page -= 1
+                            st.rerun()
+                    
+                    with col2:
+                        st.markdown(f"<div style='text-align: center; padding: 10px;'>Page {st.session_state.channel_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
+                    
+                    with col3:
+                        if st.button("Next ➡️", disabled=st.session_state.channel_page >= total_pages - 1, use_container_width=True):
+                            st.session_state.channel_page += 1
+                            st.rerun()
+                
+                # Display channels in a clean table format
+                for i, channel in enumerate(current_channels):
                     with st.container():
-                        col1, col2, col3 = st.columns([4, 3, 1])
+                        st.markdown("---")
+                        col1, col2, col3 = st.columns([3, 4, 1])
+                        
                         with col1:
-                            st.write(f"**{channel}**")
+                            st.markdown(f"**{channel}**")
+                        
                         with col2:
-                            if channel in last_videos and isinstance(last_videos[channel], dict) and last_videos[channel].get('title'):
-                                st.caption(f"🎥 {last_videos[channel]['title'][:50]}...")
+                            # Get latest video info with better error handling
+                            if channel in last_videos and isinstance(last_videos.get(channel), dict):
+                                video_info = last_videos[channel]
+                                title = video_info.get('title', '').strip()
+                                published = video_info.get('published', '').strip()
+                                
+                                if title and title != 'None':
+                                    # Truncate long titles
+                                    display_title = title[:60] + "..." if len(title) > 60 else title
+                                    st.markdown(f"🎥 **{display_title}**")
+                                    if published:
+                                        st.caption(f"� {published}")
+                                else:
+                                    st.markdown("📭 *No recent videos*")
                             else:
-                                st.caption("📭 No recent videos")
+                                st.markdown("� *No video data*")
+                        
                         with col3:
-                            if st.button("🗑️", key=f"remove_{i}", help="Remove channel"):
-                                # Remove channel - try backend first, then local
-                                with st.spinner("Removing channel..."):
-                                    # Try backend API
+                            if st.button("🗑️", key=f"remove_{start_idx + i}", help="Remove channel", use_container_width=True):
+                                with st.spinner("Removing..."):
                                     remove_result, remove_error = call_backend_api(f"/api/channels/{channel}", "DELETE")
                                     
                                     if remove_error:
-                                        # Fallback to local
                                         try:
                                             from local_functions import remove_local_channel
                                             remove_result = remove_local_channel(channel)
@@ -404,50 +468,46 @@ def main():
             else:
                 st.info("📭 No channels currently tracked")
             
-            # Add new channel
+            # Add new channel section with improved UI
+            st.markdown("---")
             st.subheader("➕ Add New Channel")
             
-            col1, col2 = st.columns([4, 1])
-            with col1:
+            with st.form("add_channel_form", clear_on_submit=True):
                 new_channel = st.text_input(
                     "Channel URL or ID:",
                     placeholder="https://www.youtube.com/@channelname or UC1234567890",
                     help="Enter YouTube channel URL or channel ID"
                 )
-            
-            with col2:
-                add_btn = st.button("Add Channel", type="primary")
-            
-            if add_btn and new_channel:
-                with st.spinner("Adding channel..."):
-                    # Try backend API first
-                    add_result, add_error = call_backend_api("/api/channels/add", "POST", {
-                        "channel_input": new_channel
-                    })
-                    
-                    if add_error:
-                        # Fallback to local function
-                        try:
-                            from local_functions import add_local_channel
-                            add_result = add_local_channel(new_channel)
-                            
-                            if add_result.get("status") == "success":
+                
+                submitted = st.form_submit_button("Add Channel", type="primary", use_container_width=True)
+                
+                if submitted and new_channel:
+                    with st.spinner("Adding channel..."):
+                        add_result, add_error = call_backend_api("/api/channels/add", "POST", {
+                            "channel_input": new_channel
+                        })
+                        
+                        if add_error:
+                            # Fallback to local function
+                            try:
+                                from local_functions import add_local_channel
+                                add_result = add_local_channel(new_channel)
+                                
+                                if add_result.get("status") == "success":
+                                    st.success("✅ Channel added successfully!")
+                                    st.session_state.channels_data = None
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {add_result.get('message', 'Addition failed')}")
+                            except Exception as e:
+                                st.error(f"❌ Error: {e}")
+                        else:
+                            if add_result and add_result.get("success"):
                                 st.success("✅ Channel added successfully!")
-                                # Clear cache to force refresh
                                 st.session_state.channels_data = None
                                 st.rerun()
                             else:
-                                st.error(f"❌ Addition failed: {add_result.get('message', 'Unknown error')}")
-                        except Exception as e:
-                            st.error(f"❌ Error adding channel: {e}")
-                    else:
-                        if add_result and add_result.get("success"):
-                            st.success("✅ Channel added successfully!")
-                            # Clear cache to force refresh
-                            st.session_state.channels_data = None
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Addition failed: {add_result.get('error', 'Unknown error') if add_result else 'No response'}")
+                                st.error(f"❌ {add_result.get('error', 'Addition failed') if add_result else 'No response'}")
     
     # Tab 3: Automation Monitoring  
     with tab3:
@@ -464,27 +524,47 @@ def main():
                     try:
                         status_data = response.json()
                         
-                        if status_data.get("success"):
+                        # Handle both new format (success: True) and old format (status: "success")
+                        is_success = status_data.get("success") == True or status_data.get("status") == "success"
+                        
+                        if is_success:
                             monitoring = status_data.get("monitoring", {})
+                            
+                            # Get channel count from channels API
+                            channel_count = 0
+                            try:
+                                channels_response = requests.get(f"{backend_url}/api/channels", timeout=5)
+                                if channels_response.status_code == 200:
+                                    channels_data = channels_response.json()
+                                    if "channels" in channels_data and isinstance(channels_data["channels"], dict):
+                                        tracked_channels = channels_data["channels"].get("tracked_channels", [])
+                                        channel_count = len([ch for ch in tracked_channels if ch and ch not in ["tracked_channels", "last_videos"]])
+                            except:
+                                channel_count = monitoring.get("channels_tracked", 0)
                             
                             # Display status in columns
                             col1, col2, col3 = st.columns(3)
                             
                             with col1:
-                                st.metric("📺 Channels Monitored", monitoring.get("channels_tracked", 0))
+                                st.metric("📺 Channels Monitored", channel_count)
                             
                             with col2:
                                 scheduler_running = monitoring.get("scheduler_running", False)
+                                # If scheduler_running is not available, check if monitoring is enabled
+                                if not scheduler_running and monitoring.get("enabled"):
+                                    scheduler_running = True  # Assume running if monitoring is enabled
                                 status_color = "🟢" if scheduler_running else "🔴"
                                 st.metric("🤖 Automation Status", f"{status_color} {'Running' if scheduler_running else 'Stopped'}")
                             
                             with col3:
                                 next_check = monitoring.get("next_check")
-                                if next_check:
+                                if next_check and next_check != "Not implemented yet":
                                     next_time = next_check.split("T")[1][:8] if "T" in next_check else next_check
                                     st.metric("⏰ Next Check", next_time)
                                 else:
-                                    st.metric("⏰ Next Check", "Not scheduled")
+                                    # Show interval instead if next_check is not available
+                                    interval = monitoring.get("interval_minutes", 30)
+                                    st.metric("⏰ Check Interval", f"Every {interval} min")
                             
                             # Control buttons
                             st.subheader("🎛️ Automation Controls")
@@ -530,12 +610,29 @@ def main():
                             
                             # Show tracked channels
                             st.subheader("📋 Monitored Channels")
-                            channels = monitoring.get("channels", [])
-                            if channels:
-                                for i, channel in enumerate(channels, 1):
+                            
+                            # Get the actual tracked channels from the channels API
+                            tracked_channels = []
+                            try:
+                                channels_response = requests.get(f"{backend_url}/api/channels", timeout=5)
+                                if channels_response.status_code == 200:
+                                    channels_data = channels_response.json()
+                                    if "channels" in channels_data and isinstance(channels_data["channels"], dict):
+                                        tracked_channels = channels_data["channels"].get("tracked_channels", [])
+                                        tracked_channels = [ch for ch in tracked_channels if ch and ch not in ["tracked_channels", "last_videos"]]
+                            except:
+                                tracked_channels = monitoring.get("channels", [])
+                            
+                            if tracked_channels:
+                                # Show channels in a compact format
+                                for i, channel in enumerate(tracked_channels[:10], 1):  # Show max 10
                                     st.text(f"{i}. {channel}")
+                                
+                                if len(tracked_channels) > 10:
+                                    st.caption(f"... and {len(tracked_channels) - 10} more channels")
+                                    st.info("💡 Go to the Channel Tracking tab to see all channels and manage them")
                             else:
-                                st.info("No channels being monitored")
+                                st.info("📭 No channels being monitored. Add channels in the Channel Tracking tab.")
                             
                             # Automation info
                             st.subheader("ℹ️ How It Works")
