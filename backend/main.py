@@ -125,34 +125,82 @@ async def generate_daily_report_job():
         
         # Get summaries from the last 24 hours
         supabase = get_supabase_client()
+        summaries = []
+        
         if supabase:
             try:
-                yesterday = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                response = supabase.table('summaries').select('*').gte('created_at', yesterday.isoformat()).execute()
-                summaries = response.data
+                # Get summaries from last 24 hours (more flexible date range)
+                from datetime import datetime, timedelta
+                yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+                
+                # Try different table names and structures
+                try:
+                    response = supabase.table('summaries').select('*').gte('created_at', yesterday).execute()
+                    summaries = response.data or []
+                    logger.info(f"📊 Found {len(summaries)} summaries from summaries table")
+                except Exception as e:
+                    logger.warning(f"Summaries table query failed: {e}")
+                    
+                    # Try transcripts table as fallback
+                    try:
+                        response = supabase.table('transcripts').select('*').gte('created_at', yesterday).execute()
+                        transcripts = response.data or []
+                        logger.info(f"📊 Found {len(transcripts)} transcripts as fallback")
+                        # Convert transcripts to summary format
+                        summaries = [{"title": t.get("title", "Unknown"), "content": t.get("transcript_text", "")[:500]} for t in transcripts]
+                    except Exception as e2:
+                        logger.warning(f"Transcripts table query also failed: {e2}")
+                        
             except Exception as e:
                 logger.warning(f"Supabase query failed, using local data: {e}")
                 summaries = []
         else:
+            logger.warning("⚠️ No Supabase client available")
             # Fallback to local data
-            summaries = []
+            try:
+                import os
+                summaries_file = os.path.join(os.path.dirname(__file__), 'shared', 'data', 'summaries.json')
+                if os.path.exists(summaries_file):
+                    with open(summaries_file, 'r') as f:
+                        local_data = json.load(f)
+                        summaries = local_data.get('summaries', [])
+                        logger.info(f"📊 Found {len(summaries)} summaries from local file")
+            except Exception as e:
+                logger.warning(f"Local summaries fallback failed: {e}")
         
-        if summaries:
-            # Generate daily report
-            report = await generate_daily_report(summaries)
-            
-            # Send to Discord
-            webhook_url = os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
-            if webhook_url and report:
-                await send_discord_message(webhook_url, report)
-                logger.info(f"📈 Daily report sent successfully ({len(summaries)} videos)")
+        # Always send a Discord message, even if no videos
+        webhook_url = os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
+        if webhook_url:
+            if summaries:
+                # Generate daily report
+                report = await generate_daily_report(summaries)
+                if report:
+                    await send_discord_message(webhook_url, report)
+                    logger.info(f"📈 Daily report sent successfully ({len(summaries)} videos)")
+                else:
+                    # Send fallback message if report generation failed
+                    fallback_msg = f"📅 **Daily Report - {datetime.now().strftime('%Y-%m-%d')}**\n\n📊 Found {len(summaries)} videos but report generation failed.\n\n🔧 Please check the summarization service."
+                    await send_discord_message(webhook_url, fallback_msg)
+                    logger.warning("⚠️ Report generation failed, sent fallback message")
             else:
-                logger.warning("⚠️ No webhook URL or empty report")
+                # Send "no videos" message
+                no_videos_msg = f"📅 **Daily Report - {datetime.now().strftime('%Y-%m-%d')}**\n\n📭 No new videos processed in the last 24 hours.\n\n💡 Add more channels or check if monitoring is working properly."
+                await send_discord_message(webhook_url, no_videos_msg)
+                logger.info("📭 No videos found - sent daily report with no videos message")
         else:
-            logger.info("📭 No new videos for daily report")
+            logger.error("❌ No DISCORD_DAILY_REPORT_WEBHOOK configured - daily report not sent")
             
     except Exception as e:
         logger.error(f"❌ Daily report generation failed: {str(e)}")
+        # Send error notification to Discord if webhook is available
+        webhook_url = os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
+        if webhook_url:
+            try:
+                error_msg = f"❌ **Daily Report Error - {datetime.now().strftime('%Y-%m-%d')}**\n\nDaily report generation failed: {str(e)}\n\n🔧 Please check the backend logs."
+                await send_discord_message(webhook_url, error_msg)
+                logger.info("📧 Error notification sent to Discord")
+            except Exception as discord_error:
+                logger.error(f"❌ Failed to send error notification to Discord: {discord_error}")
 
 async def monitor_channels_job():
     """Background job to monitor tracked channels for new videos."""
@@ -230,6 +278,9 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
             logger.error(f"❌ Failed to generate summary for video: {video_id}")
             return
         
+        # **CRITICAL FIX: Save summary to database**
+        await save_summary_to_database(video_id, video_url, transcript_data, summary, channel_id)
+        
         # Send to Discord channels
         await send_to_discord_channels(video_url, transcript_data, summary)
         
@@ -237,6 +288,79 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
         
     except Exception as e:
         logger.error(f"❌ Error processing video {video_url}: {str(e)}")
+
+async def save_summary_to_database(video_id: str, video_url: str, transcript_data: dict, summary: str, channel_id: Optional[str] = None):
+    """Save processed video summary to database."""
+    try:
+        from shared.supabase_utils import save_summary
+        
+        # Prepare summary data
+        summary_data = {
+            "video_id": video_id,
+            "video_url": video_url,
+            "title": transcript_data.get('title', 'Unknown Title'),
+            "channel": transcript_data.get('channel', 'Unknown Channel'),
+            "channel_id": channel_id,
+            "summary": summary,
+            "transcript_length": len(transcript_data.get('content', '')),
+            "processed_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Try to save to Supabase
+        supabase = get_supabase_client()
+        if supabase:
+            try:
+                save_summary(video_id, summary, transcript_data.get('title', 'Unknown Title'), video_url)
+                logger.info(f"💾 Summary saved to Supabase for video: {video_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to save summary to Supabase: {e}")
+                # Fallback to local storage
+                await save_summary_locally(summary_data)
+        else:
+            # No Supabase, save locally
+            await save_summary_locally(summary_data)
+            
+    except Exception as e:
+        logger.error(f"❌ Error saving summary to database: {str(e)}")
+
+async def save_summary_locally(summary_data: dict):
+    """Save summary to local JSON file as fallback."""
+    try:
+        import json
+        import os
+        from pathlib import Path
+        
+        # Create data directory if it doesn't exist
+        data_dir = Path(__file__).parent / 'shared' / 'data'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        
+        summaries_file = data_dir / 'summaries.json'
+        
+        # Load existing summaries
+        summaries = {"summaries": []}
+        if summaries_file.exists():
+            try:
+                with open(summaries_file, 'r', encoding='utf-8') as f:
+                    summaries = json.load(f)
+            except Exception as e:
+                logger.warning(f"Error loading existing summaries: {e}")
+                summaries = {"summaries": []}
+        
+        # Add new summary
+        summaries["summaries"].append(summary_data)
+        
+        # Keep only last 100 summaries to prevent file from growing too large
+        if len(summaries["summaries"]) > 100:
+            summaries["summaries"] = summaries["summaries"][-100:]
+        
+        # Save back to file
+        with open(summaries_file, 'w', encoding='utf-8') as f:
+            json.dump(summaries, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"💾 Summary saved locally for video: {summary_data.get('video_id')}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving summary locally: {str(e)}")
 
 async def send_to_discord_channels(video_url: str, transcript_data: dict, summary: str):
     """Send processed video data to Discord channels."""
@@ -485,6 +609,76 @@ async def trigger_daily_report():
     except Exception as e:
         logger.error(f"❌ Error triggering daily report: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reports/test")
+async def test_daily_report():
+    """Test daily report generation with debug info."""
+    try:
+        logger.info("🧪 Testing daily report generation...")
+        
+        # Check webhook configuration
+        webhook_url = os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
+        if not webhook_url:
+            return {
+                "success": False, 
+                "error": "DISCORD_DAILY_REPORT_WEBHOOK not configured",
+                "debug": "Add the webhook URL to environment variables"
+            }
+        
+        # Test database connectivity
+        supabase = get_supabase_client()
+        db_status = "connected" if supabase else "not_connected"
+        
+        # Get data for testing
+        summaries = []
+        debug_info = {"webhook_configured": True, "database_status": db_status}
+        
+        if supabase:
+            try:
+                # Check what tables exist
+                tables_to_check = ['summaries', 'transcripts']
+                for table_name in tables_to_check:
+                    try:
+                        response = supabase.table(table_name).select('*').limit(5).execute()
+                        debug_info[f"{table_name}_table"] = f"exists ({len(response.data or [])} records)"
+                        if table_name == 'summaries' and response.data:
+                            summaries = response.data[:3]  # Use a few for testing
+                    except Exception as e:
+                        debug_info[f"{table_name}_table"] = f"error: {str(e)}"
+            except Exception as e:
+                debug_info["database_error"] = str(e)
+        
+        # Generate test report
+        if summaries:
+            report = await generate_daily_report(summaries)
+            if report:
+                # Send test report
+                test_message = f"🧪 **TEST Daily Report**\n\n{report}\n\n---\n*This is a test message*"
+                await send_discord_message(webhook_url, test_message)
+                return {
+                    "success": True, 
+                    "message": f"Test daily report sent with {len(summaries)} summaries",
+                    "debug": debug_info
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Report generation failed",
+                    "debug": debug_info
+                }
+        else:
+            # Send test "no videos" message
+            test_message = f"🧪 **TEST Daily Report - {datetime.now().strftime('%Y-%m-%d')}**\n\n📭 No videos found for testing.\n\n---\n*This is a test message*"
+            await send_discord_message(webhook_url, test_message)
+            return {
+                "success": True,
+                "message": "Test 'no videos' daily report sent",
+                "debug": debug_info
+            }
+        
+    except Exception as e:
+        logger.error(f"❌ Error testing daily report: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 @app.get("/summaries")
 async def get_summaries():
