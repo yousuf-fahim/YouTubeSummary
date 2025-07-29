@@ -300,6 +300,8 @@ async def process_video_background(video_url: str, channel_id: Optional[str] = N
         
     except Exception as e:
         logger.error(f"❌ Error processing video {video_url}: {str(e)}")
+        # Re-raise the exception to see it in logs
+        raise e
 
 async def save_summary_to_database(video_id: str, video_url: str, transcript_data: dict, summary: str, channel_id: Optional[str] = None):
     """Save processed video summary to database."""
@@ -388,14 +390,21 @@ async def save_summary_locally(summary_data: dict):
 async def send_to_discord_channels(video_url: str, transcript_data: dict, summary: str):
     """Send processed video data to Discord channels."""
     try:
+        logger.info(f"📤 Sending Discord notifications for {video_url}")
+        
         # Send original URL to uploads channel
         uploads_webhook = os.getenv('DISCORD_UPLOADS_WEBHOOK')
         if uploads_webhook:
-            await send_discord_message(uploads_webhook, f"🎥 **New Video Processed:**\n{video_url}")
+            logger.info("📤 Sending to uploads channel...")
+            success = await send_discord_message(uploads_webhook, f"🎥 **New Video Processed:**\n{video_url}")
+            logger.info(f"✅ Uploads channel: {'Success' if success else 'Failed'}")
+        else:
+            logger.warning("⚠️ No uploads webhook configured")
         
         # Send transcript to transcripts channel (truncated if too long)
         transcripts_webhook = os.getenv('DISCORD_TRANSCRIPTS_WEBHOOK')
         if transcripts_webhook:
+            logger.info("📤 Sending to transcripts channel...")
             transcript_msg = f"📄 **Transcript for:** {transcript_data.get('title', 'Unknown')}\n\n"
             transcript_content = transcript_data['content']
             
@@ -405,16 +414,27 @@ async def send_to_discord_channels(video_url: str, transcript_data: dict, summar
                 transcript_content = transcript_content[:available_space] + "...\n\n[Content truncated]"
             
             transcript_msg += transcript_content
-            await send_discord_message(transcripts_webhook, transcript_msg)
+            success = await send_discord_message(transcripts_webhook, transcript_msg)
+            logger.info(f"✅ Transcripts channel: {'Success' if success else 'Failed'}")
+        else:
+            logger.warning("⚠️ No transcripts webhook configured")
         
         # Send summary to summaries channel
         summaries_webhook = os.getenv('DISCORD_SUMMARIES_WEBHOOK')
         if summaries_webhook:
+            logger.info("📤 Sending to summaries channel...")
             summary_msg = f"📊 **Summary for:** {transcript_data.get('title', 'Unknown')}\n\n{summary}"
-            await send_discord_message(summaries_webhook, summary_msg)
+            success = await send_discord_message(summaries_webhook, summary_msg)
+            logger.info(f"✅ Summaries channel: {'Success' if success else 'Failed'}")
+        else:
+            logger.warning("⚠️ No summaries webhook configured")
+            
+        logger.info(f"✅ Discord notifications completed for {video_url}")
             
     except Exception as e:
         logger.error(f"❌ Error sending to Discord: {str(e)}")
+        # Re-raise to see the error
+        raise e
 
 def extract_video_id(url: str) -> Optional[str]:
     """Extract video ID from YouTube URL."""
