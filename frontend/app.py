@@ -357,10 +357,16 @@ def main():
             if channels_data:
                 # Handle different API response formats
                 if "channels" in channels_data and isinstance(channels_data["channels"], dict):
-                    # New nested format: {"channels": {"tracked_channels": [...], "last_videos": {...}}}
-                    api_channels = channels_data["channels"]
-                    channels = api_channels.get("tracked_channels", [])
-                    last_videos = api_channels.get("last_videos", {})
+                    # Backend format: {"success": true, "channels": {"@TED": {"name": "@TED", "id": "@TED"}}, "count": 4}
+                    backend_channels = channels_data["channels"]
+                    if "tracked_channels" in backend_channels:
+                        # Nested format: {"channels": {"tracked_channels": [...], "last_videos": {...}}}
+                        channels = backend_channels.get("tracked_channels", [])
+                        last_videos = backend_channels.get("last_videos", {})
+                    else:
+                        # Direct backend format: convert dict to list
+                        channels = list(backend_channels.keys())
+                        last_videos = {}
                 elif "tracked_channels" in channels_data:
                     # Direct format: {"tracked_channels": [...], "last_videos": {...}}
                     channels = channels_data.get("tracked_channels", [])
@@ -537,10 +543,14 @@ def main():
                                 if channels_response.status_code == 200:
                                     channels_data = channels_response.json()
                                     if "channels" in channels_data and isinstance(channels_data["channels"], dict):
-                                        tracked_channels = channels_data["channels"].get("tracked_channels", [])
-                                        channel_count = len([ch for ch in tracked_channels if ch and ch not in ["tracked_channels", "last_videos"]])
+                                        # Backend returns: {"success": true, "channels": {"@TED": {...}, "@veritasium": {...}}, "count": 4}
+                                        backend_channels = channels_data["channels"]
+                                        channel_count = len(backend_channels)
+                                    elif "count" in channels_data:
+                                        # Use the count field directly
+                                        channel_count = channels_data["count"]
                             except:
-                                channel_count = monitoring.get("channels_tracked", 0)
+                                channel_count = status_data.get("channels_count", 0)
                             
                             # Display status in columns
                             col1, col2, col3 = st.columns(3)
@@ -618,10 +628,11 @@ def main():
                                 if channels_response.status_code == 200:
                                     channels_data = channels_response.json()
                                     if "channels" in channels_data and isinstance(channels_data["channels"], dict):
-                                        tracked_channels = channels_data["channels"].get("tracked_channels", [])
-                                        tracked_channels = [ch for ch in tracked_channels if ch and ch not in ["tracked_channels", "last_videos"]]
+                                        # Backend returns: {"success": true, "channels": {"@TED": {...}, "@veritasium": {...}}, "count": 4}
+                                        backend_channels = channels_data["channels"]
+                                        tracked_channels = list(backend_channels.keys())
                             except:
-                                tracked_channels = monitoring.get("channels", [])
+                                tracked_channels = []
                             
                             if tracked_channels:
                                 # Show channels in a compact format
@@ -723,7 +734,7 @@ def main():
         st.header("Reports & Analytics")
         
         # Get recent summaries
-        summaries_data, summaries_error = call_backend_api("/api/summaries")
+        summaries_data, summaries_error = call_backend_api("/summaries")
         
         if summaries_error:
             st.error(f"❌ Cannot load summaries: {summaries_error}")
@@ -794,7 +805,7 @@ def main():
         st.subheader("📅 Daily Report")
         if st.button("🚀 Generate Daily Report Now"):
             with st.spinner("Generating daily report..."):
-                report_result, report_error = call_backend_api("/api/webhook/trigger-daily-report", "POST")
+                report_result, report_error = call_backend_api("/reports/trigger", "POST")
                 
                 if report_error:
                     st.error(f"❌ Report generation failed: {report_error}")

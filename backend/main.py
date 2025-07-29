@@ -433,6 +433,33 @@ async def monitoring_status():
         logger.error(f"❌ Error getting monitoring status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/monitoring/channels")
+async def get_monitoring_details():
+    """Get detailed monitoring information including recent activity."""
+    global tracker
+    
+    try:
+        if not tracker:
+            raise HTTPException(status_code=500, detail="Tracker not initialized")
+        
+        channels = tracker.get_tracked_channels()
+        
+        # Get recent activity (this would be enhanced with actual monitoring data)
+        recent_activity = []
+        
+        return {
+            "success": True,
+            "channels": channels,
+            "channels_count": len(channels),
+            "recent_activity": recent_activity,
+            "monitoring_enabled": True,
+            "check_interval": "30 minutes"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting monitoring details: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/monitoring/trigger")
 async def trigger_monitoring():
     """Manually trigger channel monitoring."""
@@ -458,6 +485,95 @@ async def trigger_daily_report():
     except Exception as e:
         logger.error(f"❌ Error triggering daily report: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/summaries")
+async def get_summaries():
+    """Get recent summaries from the database."""
+    try:
+        supabase = get_supabase_client()
+        summaries = []
+        
+        if supabase:
+            try:
+                # Get summaries from last 30 days
+                from datetime import datetime, timedelta
+                thirty_days_ago = datetime.now() - timedelta(days=30)
+                response = supabase.table('summaries').select('*').gte('created_at', thirty_days_ago.isoformat()).order('created_at', desc=True).limit(50).execute()
+                summaries = response.data
+            except Exception as e:
+                logger.warning(f"Supabase query failed: {e}")
+        
+        if not summaries:
+            # Fallback to local data
+            try:
+                import os
+                summaries_file = os.path.join(os.path.dirname(__file__), 'shared', 'data', 'summaries.json')
+                if os.path.exists(summaries_file):
+                    with open(summaries_file, 'r') as f:
+                        local_data = json.load(f)
+                        summaries = local_data.get('summaries', [])[-50:]  # Last 50
+            except Exception as e:
+                logger.warning(f"Local summaries fallback failed: {e}")
+        
+        return {
+            "success": True,
+            "summaries": summaries,
+            "count": len(summaries)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting summaries: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/config")
+async def get_config():
+    """Get current configuration status."""
+    try:
+        config_status = {}
+        
+        # Check environment variables (don't expose actual values)
+        env_vars = [
+            "OPENAI_API_KEY",
+            "SUPABASE_URL", 
+            "SUPABASE_KEY",
+            "DISCORD_UPLOADS_WEBHOOK",
+            "DISCORD_TRANSCRIPTS_WEBHOOK",
+            "DISCORD_SUMMARIES_WEBHOOK",
+            "DISCORD_DAILY_REPORT_WEBHOOK"
+        ]
+        
+        for var in env_vars:
+            value = os.getenv(var)
+            config_status[var.lower().replace('_', '')] = "configured" if value else "not_set"
+        
+        return {
+            "success": True,
+            "config": config_status
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/test")
+async def test_discord():
+    """Test Discord webhook connectivity."""
+    try:
+        webhook_url = os.getenv('DISCORD_SUMMARIES_WEBHOOK')
+        
+        if not webhook_url:
+            return {"success": False, "error": "No Discord webhook configured"}
+        
+        # Send test message
+        test_message = "🧪 **Test Message from YouTube Summary Bot**\n\nIf you see this, the webhook is working correctly!"
+        
+        await send_discord_message(webhook_url, test_message)
+        
+        return {"success": True, "message": "Test message sent to Discord"}
+        
+    except Exception as e:
+        logger.error(f"❌ Error testing Discord: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
