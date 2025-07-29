@@ -571,3 +571,89 @@ async def generate_daily_report(summaries, api_key):
         return report
     
     return "Failed to generate daily report. Please check the logs for details." 
+
+
+# Wrapper functions for backward compatibility with main.py
+async def summarize_content(transcript: str, title: str = "Unknown Title", url: str = "") -> str:
+    """Wrapper function to summarize video content.
+    
+    Args:
+        transcript (str): Video transcript text
+        title (str): Video title
+        url (str): Video URL
+        
+    Returns:
+        str: Generated summary or None if failed
+    """
+    try:
+        # Get OpenAI API key
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("No OpenAI API key found")
+            return None
+        
+        # Generate summary using existing function
+        summary = await generate_summary(transcript, api_key)
+        
+        if summary:
+            # Try to parse JSON and format for Discord
+            try:
+                summary_data = json.loads(summary)
+                
+                # Format for Discord
+                formatted_summary = f"**📹 {summary_data.get('title', title)}**\n\n"
+                formatted_summary += f"**Summary:** {summary_data.get('summary', 'No summary available')}\n\n"
+                
+                if summary_data.get('points'):
+                    formatted_summary += "**Key Points:**\n"
+                    for point in summary_data['points']:
+                        formatted_summary += f"• {point}\n"
+                    formatted_summary += "\n"
+                
+                if summary_data.get('noteworthy_mentions'):
+                    formatted_summary += "**Notable Mentions:**\n"
+                    for mention in summary_data['noteworthy_mentions']:
+                        formatted_summary += f"• {mention}\n"
+                    formatted_summary += "\n"
+                
+                if summary_data.get('verdict'):
+                    formatted_summary += f"**Verdict:** {summary_data['verdict']}\n\n"
+                
+                if url:
+                    formatted_summary += f"**🔗 Watch:** {url}"
+                
+                return formatted_summary
+                
+            except json.JSONDecodeError:
+                # If not JSON, return the raw summary
+                return f"**📹 {title}**\n\n{summary}\n\n**🔗 Watch:** {url}" if url else f"**📹 {title}**\n\n{summary}"
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error in summarize_content: {e}")
+        return None
+
+
+async def generate_daily_report_wrapper(summaries: list) -> str:
+    """Wrapper function to generate daily report from summaries.
+    
+    Args:
+        summaries (list): List of summary data from database
+        
+    Returns:
+        str: Generated daily report
+    """
+    try:
+        # Get OpenAI API key
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("No OpenAI API key found")
+            return "Daily report generation failed: No OpenAI API key configured"
+        
+        # Use existing function
+        return await generate_daily_report(summaries, api_key)
+        
+    except Exception as e:
+        print(f"Error in generate_daily_report wrapper: {e}")
+        return "Daily report generation failed due to an error"

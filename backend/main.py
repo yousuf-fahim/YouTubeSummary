@@ -20,7 +20,7 @@ import pytz
 # Import shared modules
 from shared.youtube_tracker import YouTubeTracker
 from shared.transcript import get_transcript
-from shared.summarize import summarize_content, generate_daily_report
+from shared.summarize import summarize_content, generate_daily_report_wrapper as generate_daily_report
 from shared.discord_utils import send_discord_message
 from shared.supabase_utils import get_supabase_client
 from shared.config_service import ConfigService

@@ -617,3 +617,146 @@ def check_tracked_channels(process_func):
     
     logger.info(f"Channel check complete. Processed {new_videos_count} new videos.")
     return new_videos_count 
+
+
+class YouTubeTracker:
+    """Class to manage YouTube channel tracking and monitoring."""
+    
+    def __init__(self):
+        """Initialize the YouTubeTracker."""
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info("YouTubeTracker initialized")
+    
+    def add_channel(self, channel_id: str, channel_name: str) -> bool:
+        """Add a channel to tracking.
+        
+        Args:
+            channel_id (str): YouTube channel ID or handle
+            channel_name (str): Display name for the channel
+            
+        Returns:
+            bool: True if added successfully, False otherwise
+        """
+        try:
+            tracking_data = load_tracking_data()
+            tracked_channels = tracking_data.get("tracked_channels", [])
+            
+            if channel_id not in tracked_channels:
+                tracked_channels.append(channel_id)
+                tracking_data["tracked_channels"] = tracked_channels
+                
+                success = save_tracking_data(tracking_data)
+                if success:
+                    self.logger.info(f"Added channel {channel_name} ({channel_id}) to tracking")
+                    return True
+                else:
+                    self.logger.error(f"Failed to save tracking data for channel {channel_id}")
+                    return False
+            else:
+                self.logger.info(f"Channel {channel_id} is already being tracked")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error adding channel {channel_id}: {e}")
+            return False
+    
+    def remove_channel(self, channel_id: str) -> bool:
+        """Remove a channel from tracking.
+        
+        Args:
+            channel_id (str): YouTube channel ID or handle to remove
+            
+        Returns:
+            bool: True if removed successfully, False otherwise
+        """
+        try:
+            tracking_data = load_tracking_data()
+            tracked_channels = tracking_data.get("tracked_channels", [])
+            last_videos = tracking_data.get("last_videos", {})
+            
+            if channel_id in tracked_channels:
+                tracked_channels.remove(channel_id)
+                tracking_data["tracked_channels"] = tracked_channels
+                
+                # Also remove from last_videos
+                if channel_id in last_videos:
+                    del last_videos[channel_id]
+                    tracking_data["last_videos"] = last_videos
+                
+                success = save_tracking_data(tracking_data)
+                if success:
+                    self.logger.info(f"Removed channel {channel_id} from tracking")
+                    return True
+                else:
+                    self.logger.error(f"Failed to save tracking data after removing channel {channel_id}")
+                    return False
+            else:
+                self.logger.warning(f"Channel {channel_id} was not being tracked")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error removing channel {channel_id}: {e}")
+            return False
+    
+    def get_tracked_channels(self) -> Dict:
+        """Get all tracked channels.
+        
+        Returns:
+            Dict: Dictionary with channel IDs as keys and channel info as values
+        """
+        try:
+            tracking_data = load_tracking_data()
+            tracked_channels = tracking_data.get("tracked_channels", [])
+            
+            # Convert list to dict format expected by main.py
+            channels_dict = {}
+            for channel_id in tracked_channels:
+                channels_dict[channel_id] = {
+                    "name": channel_id,  # Use channel_id as name for now
+                    "id": channel_id
+                }
+            
+            return channels_dict
+            
+        except Exception as e:
+            self.logger.error(f"Error getting tracked channels: {e}")
+            return {}
+    
+    async def check_for_new_videos(self, channel_id: str) -> List[Dict]:
+        """Check for new videos from a specific channel.
+        
+        Args:
+            channel_id (str): YouTube channel ID or handle
+            
+        Returns:
+            List[Dict]: List of new videos found
+        """
+        try:
+            tracking_data = load_tracking_data()
+            last_videos = tracking_data.get("last_videos", {})
+            
+            # Get latest video from channel
+            latest_video = get_latest_videos_from_channel(channel_id)
+            
+            if not latest_video:
+                self.logger.warning(f"No videos found for channel {channel_id}")
+                return []
+            
+            video_id = latest_video['id']
+            
+            # Check if this is a new video
+            if channel_id in last_videos and last_videos[channel_id] == video_id:
+                self.logger.info(f"No new videos for {channel_id}")
+                return []
+            
+            # Update last video ID
+            last_videos[channel_id] = video_id
+            tracking_data["last_videos"] = last_videos
+            save_tracking_data(tracking_data)
+            
+            self.logger.info(f"Found new video from {channel_id}: {latest_video['title']}")
+            return [latest_video]
+            
+        except Exception as e:
+            self.logger.error(f"Error checking for new videos from {channel_id}: {e}")
+            return []
