@@ -4,7 +4,6 @@ import re
 import ssl
 import os
 from youtube_transcript_api import YouTubeTranscriptApi, _errors
-from youtube_transcript_api.formatters import TextFormatter
 from .supabase_utils import get_transcript as get_supabase_transcript, save_transcript as save_supabase_transcript
 
 # Create a context that doesn't verify certificates (for development only)
@@ -98,7 +97,7 @@ async def get_video_details(video_id):
 
 async def get_transcript(youtube_url):
     """
-    Get the transcript for a YouTube video
+    Get the transcript for a YouTube video - optimized to match frontend reliability
     
     Args:
         youtube_url (str): YouTube URL
@@ -114,62 +113,58 @@ async def get_transcript(youtube_url):
     
     print(f"Extracting transcript for YouTube ID: {video_id}")
     
-    # Check if transcript already exists in Supabase
+    # Check if transcript already exists in Supabase (but don't fail if Supabase is down)
     try:
         existing_transcript = get_supabase_transcript(video_id)
         if existing_transcript:
             print(f"Transcript found in Supabase for video ID: {video_id}")
             return existing_transcript.get("transcript_text")
     except Exception as e:
-        print(f"Error checking Supabase transcript: {e}")
-        # Continue without Supabase - we can still get transcripts
+        print(f"Warning: Could not check Supabase for existing transcript: {e}")
+        # Continue - Supabase being down shouldn't prevent transcript extraction
     
-    # First try: Tactiq (works best with cloud IPs)
+    # Primary approach: Use YouTube Transcript API directly (same as frontend)
+    transcript = None
     try:
-        print("Trying Tactiq API...")
-        transcript = await _get_transcript_from_tactiq(video_id)
-        if transcript and len(transcript.strip()) > 50:  # Make sure we got substantial content
-            print("Successfully retrieved transcript from Tactiq")
-            # Get video details (title and channel)
-            title, channel = await get_video_details(video_id)
-            # Try to save to Supabase (but don't fail if it doesn't work)
-            try:
-                save_supabase_transcript(video_id, transcript, title, channel)
-            except Exception as e:
-                print(f"Warning: Could not save to Supabase: {e}")
-            # Save to local file
-            save_transcript_to_local_file(video_id, transcript, title, channel)
-            return transcript
-        else:
-            print("Tactiq returned empty or short transcript")
-    except Exception as e:
-        print(f"Tactiq API error: {e}")
-    
-    # Second try: YouTube Transcript API (fallback)
-    try:
-        print("Trying YouTube Transcript API...")
+        print("Trying YouTube Transcript API (primary approach)...")
         transcript = _get_transcript_any_language(video_id)
+        
         if transcript and len(transcript.strip()) > 50:
-            print("Successfully retrieved transcript from YouTube API")
-            # Get video details (title and channel)
-            title, channel = await get_video_details(video_id)
+            print("✅ Successfully retrieved transcript from YouTube API")
+            
+            # Get video details (title and channel) for saving
+            try:
+                title, channel = await get_video_details(video_id)
+            except Exception as e:
+                print(f"Warning: Could not get video details: {e}")
+                title, channel = "Unknown Title", "Unknown Channel"
+            
             # Try to save to Supabase (but don't fail if it doesn't work)
             try:
                 save_supabase_transcript(video_id, transcript, title, channel)
+                print("✅ Transcript saved to Supabase")
             except Exception as e:
                 print(f"Warning: Could not save to Supabase: {e}")
-            # Save to local file
-            save_transcript_to_local_file(video_id, transcript, title, channel)
+            
+            # Save to local file (should always work)
+            try:
+                save_transcript_to_local_file(video_id, transcript, title, channel)
+                print("✅ Transcript saved locally")
+            except Exception as e:
+                print(f"Warning: Could not save locally: {e}")
+            
             return transcript
+            
     except Exception as e:
-        print(f"YouTube API error: {e}")
+        print(f"Primary transcript extraction failed: {e}")
     
-    print(f"Failed to get transcript for video {video_id}")
+    # If we get here, transcript extraction failed
+    print(f"❌ Failed to get transcript for video {video_id}")
     return None
 
 def _get_transcript_any_language(video_id):
     """
-    Simple fallback using YouTube Transcript API
+    Simple fallback using YouTube Transcript API - matches frontend approach exactly
     
     Args:
         video_id (str): YouTube video ID
@@ -178,14 +173,17 @@ def _get_transcript_any_language(video_id):
         str: The transcript text or None if not found
     """
     try:
-        # Use instance method (correct for this API version)
+        # Use the exact same approach as the frontend for maximum compatibility
         api = YouTubeTranscriptApi()
         transcript_list = api.fetch(video_id)
-        formatter = TextFormatter()
-        result = formatter.format_transcript(transcript_list)
-        if result and len(result.strip()) > 20:
-            print(f"YouTube API returned {len(result)} characters")
-            return result
+        
+        # Extract just the text using .text attribute (not dictionary access)
+        transcript = ' '.join([snippet.text for snippet in transcript_list])
+        
+        if transcript and len(transcript.strip()) > 20:
+            print(f"YouTube API returned {len(transcript)} characters")
+            return transcript
+            
     except Exception as e:
         print(f"YouTube Transcript API failed: {e}")
         try:
@@ -194,14 +192,16 @@ def _get_transcript_any_language(video_id):
                 try:
                     api = YouTubeTranscriptApi()
                     transcript_list = api.fetch(video_id, languages=[lang])
-                    formatter = TextFormatter()
-                    result = formatter.format_transcript(transcript_list)
-                    if result and len(result.strip()) > 20:
-                        print(f"YouTube API with {lang} returned {len(result)} characters")
-                        return result
+                    transcript = ' '.join([snippet.text for snippet in transcript_list])
+                    
+                    if transcript and len(transcript.strip()) > 20:
+                        print(f"YouTube API with {lang} returned {len(transcript)} characters")
+                        return transcript
+                        
                 except Exception as e2:
                     print(f"YouTube API with {lang} failed: {e2}")
                     continue
+                    
         except Exception as e3:
             print(f"All YouTube API attempts failed: {e3}")
     
@@ -230,13 +230,17 @@ async def _get_transcript_from_tactiq(video_id):
 
 def _get_transcript_from_api(video_id):
     """
-    Simple fallback using YouTube Transcript API directly
+    Simple fallback using YouTube Transcript API directly - matches frontend exactly
     """
     try:
+        # Use the exact same approach as the working frontend
         api = YouTubeTranscriptApi()
         transcript_list = api.fetch(video_id)
-        formatter = TextFormatter()
-        return formatter.format_transcript(transcript_list)
+        
+        # Extract just the text using .text attribute (not dictionary access)
+        transcript = ' '.join([snippet.text for snippet in transcript_list])
+        return transcript
+        
     except Exception as e:
         print(f"YouTube API transcript error: {e}")
         raise
