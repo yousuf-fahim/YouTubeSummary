@@ -109,8 +109,9 @@ def handle_local_fallback(endpoint, method, data):
     """Handle API calls with local functions"""
     try:
         if endpoint == "/process" and method == "POST":
-            if data and data.get("youtube_url"):
-                result = test_video_processing(data["youtube_url"])
+            if data and (data.get("url") or data.get("youtube_url")):
+                url = data.get("url") or data.get("youtube_url")
+                result = test_video_processing(url)
                 return result, None
         
         elif endpoint == "/channels" and method == "GET":
@@ -118,8 +119,9 @@ def handle_local_fallback(endpoint, method, data):
             return result, None
         
         elif endpoint == "/channels/add" and method == "POST":
-            if data and data.get("channel_input"):
-                result = add_local_channel(data["channel_input"])
+            if data and (data.get("channel_id") or data.get("channel_input")):
+                channel = data.get("channel_id") or data.get("channel_input")
+                result = add_local_channel(channel)
                 return result, None
         
         elif endpoint.startswith("/channels/") and method == "DELETE":
@@ -266,7 +268,7 @@ def main():
                 with st.spinner("Processing video... This may take a few minutes."):
                     # Call backend API for manual summary
                     result, error = call_backend_api("/process", "POST", {
-                        "youtube_url": youtube_url
+                        "url": youtube_url
                     })
                     
                     if error:
@@ -490,7 +492,8 @@ def main():
                 if submitted and new_channel:
                     with st.spinner("Adding channel..."):
                         add_result, add_error = call_backend_api("/channels/add", "POST", {
-                            "channel_input": new_channel
+                            "channel_id": new_channel,
+                            "channel_name": new_channel
                         })
                         
                         if add_error:
