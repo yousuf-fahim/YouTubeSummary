@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import NotificationProvider from '@/components/notifications'
 
 export const metadata: Metadata = {
   title: 'YouTube Summary Bot',
@@ -21,9 +22,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <div id="root" className="min-h-screen">
-          {children}
-        </div>
+        <NotificationProvider>
+          <div id="root" className="min-h-screen">
+            {children}
+          </div>
+        </NotificationProvider>
       </body>
     </html>
   )

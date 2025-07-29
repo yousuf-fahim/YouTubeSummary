@@ -2,7 +2,7 @@ import os
 import sys
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import json
 
@@ -12,7 +12,7 @@ parent_dir = os.path.join(current_dir, '..')
 sys.path.append(current_dir)  # For Heroku deployment (shared in same directory)
 sys.path.append(parent_dir)   # For local development (shared in parent directory)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -34,6 +34,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Discord commands (import with try/catch to handle missing dependencies)
+try:
+    from shared.discord_commands import discord_handler
+    DISCORD_COMMANDS_ENABLED = True
+except ImportError as e:
+    logger.warning(f"Discord commands disabled due to missing dependencies: {e}")
+    DISCORD_COMMANDS_ENABLED = False
 
 app = FastAPI(title="YouTube Summary Bot API", version="1.0.0")
 
@@ -58,6 +66,10 @@ class VideoRequest(BaseModel):
 class ChannelRequest(BaseModel):
     channel_id: str
     channel_name: str
+
+class BulkVideoRequest(BaseModel):
+    urls: List[str]
+    channel_id: Optional[str] = None
 
 class ProcessingResponse(BaseModel):
     success: bool
@@ -466,6 +478,51 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
         logger.error(f"❌ Error in process_video endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/process/bulk")
+async def process_bulk_videos(request: BulkVideoRequest, background_tasks: BackgroundTasks):
+    """Process multiple YouTube videos."""
+    try:
+        logger.info(f"📥 Processing {len(request.urls)} videos in bulk")
+        
+        if len(request.urls) > 10:  # Limit to prevent abuse
+            raise HTTPException(status_code=400, detail="Maximum 10 videos per bulk request")
+        
+        valid_videos = []
+        invalid_urls = []
+        
+        # Validate all URLs first
+        for url in request.urls:
+            video_id = extract_video_id(url)
+            if video_id:
+                valid_videos.append((video_id, url))
+            else:
+                invalid_urls.append(url)
+        
+        if not valid_videos:
+            raise HTTPException(status_code=400, detail="No valid YouTube URLs provided")
+        
+        # Add background tasks for all valid videos
+        for video_id, url in valid_videos:
+            background_tasks.add_task(process_video_background, url, request.channel_id)
+        
+        response_message = f"Started processing {len(valid_videos)} videos"
+        if invalid_urls:
+            response_message += f". Skipped {len(invalid_urls)} invalid URLs"
+        
+        return {
+            "success": True,
+            "message": response_message,
+            "processed_count": len(valid_videos),
+            "invalid_count": len(invalid_urls),
+            "invalid_urls": invalid_urls
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error processing bulk videos: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/channels/add")
 async def add_channel(request: ChannelRequest):
     """Add a channel to tracking."""
@@ -719,10 +776,134 @@ async def get_summaries():
         logger.error(f"❌ Error getting summaries: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/config")
-async def get_config():
-    """Get current configuration status."""
+@app.get("/analytics")
+async def get_analytics():
+    """Get analytics data for the dashboard."""
     try:
+        supabase = get_supabase_client()
+        if not supabase:
+            return {"success": False, "error": "Database not available"}
+        
+        # Get summary statistics
+        summaries_result = supabase.table('summaries').select('*').execute()
+        summaries = summaries_result.data
+        
+        # Get transcript statistics
+        transcripts_result = supabase.table('transcripts').select('*').execute()
+        transcripts = transcripts_result.data
+        
+        # Calculate analytics
+        total_summaries = len(summaries)
+        total_transcripts = len(transcripts)
+        
+        # Channel distribution
+        channel_stats = {}
+        for summary in summaries:
+            channel = summary.get('channel', 'Unknown')
+            channel_stats[channel] = channel_stats.get(channel, 0) + 1
+        
+        # Recent activity (last 7 days)
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        week_ago = now - timedelta(days=7)
+        week_ago_str = week_ago.isoformat()
+        
+        recent_summaries = [s for s in summaries if s.get('created_at', '') > week_ago_str]
+        
+        # Daily activity for the last 7 days
+        daily_activity = {}
+        for i in range(7):
+            date = (now - timedelta(days=i)).strftime('%Y-%m-%d')
+            daily_activity[date] = 0
+        
+        for summary in recent_summaries:
+            if summary.get('created_at'):
+                date = summary['created_at'][:10]  # Get YYYY-MM-DD part
+                if date in daily_activity:
+                    daily_activity[date] += 1
+        
+        # Top channels by content
+        top_channels = sorted(channel_stats.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        # Processing stats
+        avg_summary_length = 0
+        if summaries:
+            total_length = sum(len(s.get('summary_text', '')) for s in summaries)
+            avg_summary_length = total_length / len(summaries)
+        
+        # Get tracked channels count
+        config = ConfigService()
+        tracked_channels = config.load_config().get('tracked_channels', {})
+        
+        return {
+            "success": True,
+            "analytics": {
+                "overview": {
+                    "total_summaries": total_summaries,
+                    "total_transcripts": total_transcripts,
+                    "tracked_channels": len(tracked_channels),
+                    "avg_summary_length": round(avg_summary_length, 2)
+                },
+                "recent_activity": {
+                    "last_7_days": len(recent_summaries),
+                    "daily_breakdown": daily_activity
+                },
+                "channel_distribution": dict(top_channels),
+                "processing_stats": {
+                    "total_processed": total_summaries,
+                    "success_rate": 100,  # Assume all stored summaries were successful
+                    "avg_processing_time": "2-3 minutes"  # Estimated
+                }
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting analytics: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/analytics/recent")
+async def get_recent_activity(days: int = 7):
+    """Get recent activity for specified number of days."""
+    try:
+        supabase = get_supabase_client()
+        if not supabase:
+            return {"success": False, "error": "Database not available"}
+        
+        # Calculate date range
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        start_date = now - timedelta(days=days)
+        start_date_str = start_date.isoformat()
+        
+        # Get recent summaries
+        result = supabase.table('summaries').select('*').gte('created_at', start_date_str).order('created_at', desc=True).execute()
+        summaries = result.data
+        
+        # Group by date
+        activity_by_date = {}
+        for summary in summaries:
+            if summary.get('created_at'):
+                date = summary['created_at'][:10]  # Get YYYY-MM-DD part
+                if date not in activity_by_date:
+                    activity_by_date[date] = []
+                activity_by_date[date].append({
+                    "id": summary.get('id'),
+                    "title": summary.get('title'),
+                    "channel": summary.get('channel'),
+                    "video_id": summary.get('video_id'),
+                    "created_at": summary.get('created_at')
+                })
+        
+        return {
+            "success": True,
+            "days": days,
+            "total_items": len(summaries),
+            "activity": activity_by_date
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting recent activity: {str(e)}")
+        return {"success": False, "error": str(e)}
         config_status = {}
         
         # Check environment variables (don't expose actual values)
@@ -768,6 +949,134 @@ async def test_discord():
     except Exception as e:
         logger.error(f"❌ Error testing Discord: {str(e)}")
         return {"success": False, "error": str(e)}
+
+@app.post("/discord/commands")
+async def discord_commands_webhook(request: Request):
+    """Handle Discord application commands webhook."""
+    if not DISCORD_COMMANDS_ENABLED:
+        raise HTTPException(status_code=503, detail="Discord commands not available")
+    
+    try:
+        # Get headers for signature verification
+        signature = request.headers.get('x-signature-ed25519')
+        timestamp = request.headers.get('x-signature-timestamp')
+        
+        if not signature or not timestamp:
+            raise HTTPException(status_code=401, detail="Missing signature headers")
+        
+        # Get request body
+        body = await request.body()
+        
+        # Verify Discord signature
+        if not await discord_handler.verify_discord_request(body, signature, timestamp):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+        
+        # Parse interaction
+        interaction = await request.json()
+        
+        # Handle ping (Discord verification)
+        if interaction.get('type') == 1:  # PING
+            return {"type": 1}  # PONG
+        
+        # Handle application command
+        if interaction.get('type') == 2:  # APPLICATION_COMMAND
+            response = await discord_handler.handle_command(interaction)
+            return response
+        
+        # Handle other interaction types
+        return {
+            "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
+            "data": {
+                "content": "Interaction type not supported yet",
+                "flags": 64  # EPHEMERAL
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Discord commands error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Analytics Endpoints
+@app.get("/analytics/overview")
+async def analytics_overview():
+    """Get analytics overview with summary statistics."""
+    try:
+        supabase = get_supabase_client()
+        if not supabase:
+            raise HTTPException(status_code=503, detail="Database not available")
+        
+        # Get total summaries count
+        summaries_response = supabase.table('summaries').select('id', count='exact').execute()
+        total_summaries = summaries_response.count if summaries_response.count else 0
+        
+        # Get channel distribution
+        channels_response = supabase.table('tracked_channels').select('channel_name').execute()
+        channels = [ch['channel_name'] for ch in channels_response.data] if channels_response.data else []
+        
+        # Get recent activity (last 7 days)
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        recent_response = supabase.table('summaries').select('id', count='exact').gte('created_at', seven_days_ago).execute()
+        recent_summaries = recent_response.count if recent_response.count else 0
+        
+        # Get daily breakdown for last 7 days
+        daily_counts = []
+        for i in range(7):
+            date = datetime.now(timezone.utc) - timedelta(days=i)
+            day_start = date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            day_end = date.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
+            
+            day_response = supabase.table('summaries').select('id', count='exact').gte('created_at', day_start).lte('created_at', day_end).execute()
+            daily_counts.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "count": day_response.count if day_response.count else 0
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "total_summaries": total_summaries,
+                "tracked_channels": len(channels),
+                "recent_summaries": recent_summaries,
+                "daily_activity": daily_counts,
+                "channels": channels
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting analytics overview: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/analytics/recent")
+async def analytics_recent():
+    """Get recent activity analytics."""
+    try:
+        supabase = get_supabase_client()
+        if not supabase:
+            raise HTTPException(status_code=503, detail="Database not available")
+        
+        # Get recent summaries with video metadata
+        recent_response = supabase.table('summaries').select('*').order('created_at', desc=True).limit(20).execute()
+        recent_summaries = recent_response.data if recent_response.data else []
+        
+        # Get processing statistics
+        twenty_four_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        last_24h_response = supabase.table('summaries').select('id', count='exact').gte('created_at', twenty_four_hours_ago).execute()
+        last_24h_count = last_24h_response.count if last_24h_response.count else 0
+        
+        return {
+            "success": True,
+            "data": {
+                "recent_summaries": recent_summaries,
+                "last_24h_count": last_24h_count,
+                "total_tracked": len(recent_summaries)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting recent analytics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

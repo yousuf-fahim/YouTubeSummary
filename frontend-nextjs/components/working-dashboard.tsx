@@ -10,6 +10,8 @@ import {
   Youtube,
   AlertCircle
 } from 'lucide-react'
+import { useNotifications, useRealtimeUpdates } from './notifications'
+import AdvancedSearch from './advanced-search'
 
 // Simple types
 interface Channel {
@@ -42,11 +44,16 @@ export default function WorkingDashboard() {
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
   const [summaries, setSummaries] = useState<Summary[]>([])
+  const [filteredSummaries, setFilteredSummaries] = useState<Summary[]>([])
   const [videoUrl, setVideoUrl] = useState('')
   const [newChannelId, setNewChannelId] = useState('')
   const [newChannelName, setNewChannelName] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Notifications and real-time updates
+  const { addNotification } = useNotifications()
+  useRealtimeUpdates(API_BASE)
 
   // API calls
   const fetchHealthStatus = useCallback(async () => {
@@ -102,13 +109,32 @@ export default function WorkingDashboard() {
       })
       
       if (response.ok) {
+        const result = await response.json()
+        addNotification({
+          type: 'success',
+          title: 'Video Processing Started',
+          message: `Processing "${videoUrl}" - summary will be ready shortly`,
+          duration: 6000
+        })
         setVideoUrl('')
         setTimeout(fetchSummaries, 2000) // Refresh summaries after a delay
       } else {
         setError('Failed to process video')
+        addNotification({
+          type: 'error',
+          title: 'Processing Failed',
+          message: 'Unable to process the video. Please check the URL and try again.',
+          duration: 8000
+        })
       }
     } catch (err) {
       setError('Error processing video')
+      addNotification({
+        type: 'error',
+        title: 'Connection Error',
+        message: 'Unable to connect to the backend service.',
+        duration: 8000
+      })
     } finally {
       setIsLoading(false)
     }
@@ -143,6 +169,11 @@ export default function WorkingDashboard() {
     fetchChannels()
     fetchSummaries()
   }, [fetchHealthStatus, fetchChannels, fetchSummaries])
+
+  // Initialize filtered summaries when summaries change
+  useEffect(() => {
+    setFilteredSummaries(summaries)
+  }, [summaries])
 
   // Tab content
   const renderTabContent = () => {
@@ -248,21 +279,39 @@ export default function WorkingDashboard() {
       case 'summaries':
         return (
           <div className="space-y-6">
+            {/* Advanced Search */}
+            <AdvancedSearch
+              summaries={summaries}
+              channels={channels.map(c => c.name)}
+              onFilteredResults={setFilteredSummaries}
+            />
+            
             <div className="bg-white rounded-lg border p-6">
               <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <Activity className="w-5 h-5" />
-                Recent Summaries ({summaries.length})
+                Summaries ({filteredSummaries.length})
               </h3>
               
-              {summaries.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">No summaries yet</p>
+              {filteredSummaries.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">
+                  {summaries.length === 0 ? 'No summaries yet' : 'No summaries match your filters'}
+                </p>
               ) : (
-                <div className="space-y-4">
-                  {summaries.slice(0, 10).map((summary, index) => (
-                    <div key={summary.id || index} className="border rounded-lg p-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredSummaries.map((summary, index) => (
+                    <div key={summary.id || index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                       <div className="flex items-start gap-3">
-                        <div className="w-16 h-12 bg-gray-200 rounded flex items-center justify-center">
-                          <Youtube className="w-6 h-6 text-gray-500" />
+                        <div className="w-16 h-12 bg-gray-200 rounded flex items-center justify-center overflow-hidden">
+                          <img
+                            src={`https://img.youtube.com/vi/${summary.video_id}/mqdefault.jpg`}
+                            alt="Thumbnail"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none'
+                              e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                            }}
+                          />
+                          <Youtube className="w-6 h-6 text-gray-500 hidden" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium truncate">{summary.title}</h4>
@@ -275,6 +324,14 @@ export default function WorkingDashboard() {
                               {summary.summary_text.substring(0, 150)}...
                             </p>
                           )}
+                          <a
+                            href={`https://www.youtube.com/watch?v=${summary.video_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 text-sm mt-2 inline-block"
+                          >
+                            Watch on YouTube →
+                          </a>
                         </div>
                       </div>
                     </div>
