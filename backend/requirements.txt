@@ -1,4 +1,4 @@
-# Simplified Backend Requirements
+# Backend Requirements with Performance Monitoring
 fastapi>=0.104.0
 uvicorn>=0.23.0
 pydantic>=2.5.0
@@ -11,3 +11,4 @@ aiohttp>=3.9.0
 beautifulsoup4>=4.13.0
 pytz>=2023.3
 apscheduler>=3.10.0
+psutil>=5.9.0

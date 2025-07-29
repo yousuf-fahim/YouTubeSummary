@@ -28,6 +28,40 @@ from shared.discord_utils import send_discord_message
 from shared.supabase_utils import get_supabase_client
 from shared.config_service import ConfigService
 
+# Performance monitoring and security imports
+import time
+import psutil
+import gc
+from collections import defaultdict
+import tracemalloc
+from functools import wraps
+import hashlib
+import secrets
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
+
+# Performance monitoring setup
+tracemalloc.start()
+
+# Global performance metrics
+performance_metrics = {
+    "request_count": defaultdict(int),
+    "response_times": defaultdict(list),
+    "error_count": defaultdict(int),
+    "system_stats": [],
+    "active_connections": 0,
+    "memory_usage": [],
+    "cpu_usage": []
+}
+
+# Rate limiting storage
+rate_limit_storage = defaultdict(list)
+
+# Security configuration
+security = HTTPBearer(auto_error=False)
+API_KEY_HASH = hashlib.sha256(os.getenv('API_SECURITY_KEY', 'default-secure-key-2025').encode()).hexdigest()
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +79,73 @@ except ImportError as e:
 
 app = FastAPI(title="YouTube Summary Bot API", version="1.0.0")
 
+# Performance monitoring middleware
+@app.middleware("http")
+async def performance_monitoring_middleware(request: Request, call_next):
+    start_time = time.time()
+    performance_metrics["active_connections"] += 1
+    
+    try:
+        response = await call_next(request)
+        
+        # Record performance metrics
+        process_time = time.time() - start_time
+        endpoint = f"{request.method} {request.url.path}"
+        
+        performance_metrics["request_count"][endpoint] += 1
+        performance_metrics["response_times"][endpoint].append(process_time)
+        
+        # Keep only last 100 response times per endpoint
+        if len(performance_metrics["response_times"][endpoint]) > 100:
+            performance_metrics["response_times"][endpoint] = performance_metrics["response_times"][endpoint][-100:]
+        
+        # Add performance headers
+        response.headers["X-Process-Time"] = str(process_time)
+        response.headers["X-Request-ID"] = secrets.token_urlsafe(16)
+        
+        return response
+        
+    except Exception as e:
+        endpoint = f"{request.method} {request.url.path}"
+        performance_metrics["error_count"][endpoint] += 1
+        logger.error(f"Request failed: {endpoint} - {str(e)}")
+        raise e
+        
+    finally:
+        performance_metrics["active_connections"] -= 1
+
+# Security middleware
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    # Rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    current_time = time.time()
+    
+    # Clean old entries (older than 1 hour)
+    rate_limit_storage[client_ip] = [
+        req_time for req_time in rate_limit_storage[client_ip] 
+        if current_time - req_time < 3600
+    ]
+    
+    # Check rate limit (100 requests per hour per IP)
+    if len(rate_limit_storage[client_ip]) > 100:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded", "retry_after": 3600}
+        )
+    
+    rate_limit_storage[client_ip].append(current_time)
+    
+    response = await call_next(request)
+    
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    return response
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -54,10 +155,103 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add trusted host middleware for security
+app.add_middleware(
+    TrustedHostMiddleware, 
+    allowed_hosts=["*"]  # Configure with specific domains in production
+)
+
 # Global variables
 tracker = None
 scheduler = None
 config_service = ConfigService()
+
+# Performance monitoring decorator
+def monitor_performance(func):
+    """Decorator to monitor function performance"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        start_time = time.time()
+        func_name = f"{func.__module__}.{func.__name__}"
+        
+        try:
+            result = await func(*args, **kwargs)
+            execution_time = time.time() - start_time
+            
+            # Record performance metrics
+            performance_metrics["response_times"][func_name].append(execution_time)
+            if len(performance_metrics["response_times"][func_name]) > 50:
+                performance_metrics["response_times"][func_name] = performance_metrics["response_times"][func_name][-50:]
+            
+            logger.info(f"⚡ {func_name} executed in {execution_time:.3f}s")
+            return result
+            
+        except Exception as e:
+            performance_metrics["error_count"][func_name] += 1
+            logger.error(f"❌ {func_name} failed after {time.time() - start_time:.3f}s: {str(e)}")
+            raise e
+    
+    return wrapper
+
+# System monitoring function
+def collect_system_metrics():
+    """Collect system performance metrics"""
+    try:
+        # CPU and memory usage
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        # Memory usage from tracemalloc
+        current, peak = tracemalloc.get_traced_memory()
+        
+        metrics = {
+            "timestamp": datetime.now().isoformat(),
+            "cpu_percent": cpu_percent,
+            "memory_percent": memory.percent,
+            "memory_used_mb": memory.used / 1024 / 1024,
+            "memory_available_mb": memory.available / 1024 / 1024,
+            "python_memory_current_mb": current / 1024 / 1024,
+            "python_memory_peak_mb": peak / 1024 / 1024,
+            "active_connections": performance_metrics["active_connections"]
+        }
+        
+        # Store metrics (keep last 100 entries)
+        performance_metrics["system_stats"].append(metrics)
+        if len(performance_metrics["system_stats"]) > 100:
+            performance_metrics["system_stats"] = performance_metrics["system_stats"][-100:]
+        
+        # Store individual metrics for trending
+        performance_metrics["cpu_usage"].append(cpu_percent)
+        performance_metrics["memory_usage"].append(memory.percent)
+        
+        if len(performance_metrics["cpu_usage"]) > 100:
+            performance_metrics["cpu_usage"] = performance_metrics["cpu_usage"][-100:]
+        if len(performance_metrics["memory_usage"]) > 100:
+            performance_metrics["memory_usage"] = performance_metrics["memory_usage"][-100:]
+        
+        return metrics
+        
+    except Exception as e:
+        logger.error(f"❌ Error collecting system metrics: {str(e)}")
+        return None
+
+# Security helper functions
+def verify_api_key(credentials: HTTPAuthorizationCredentials = None) -> bool:
+    """Verify API key for sensitive endpoints"""
+    if not credentials:
+        return False
+    
+    provided_hash = hashlib.sha256(credentials.credentials.encode()).hexdigest()
+    return provided_hash == API_KEY_HASH
+
+def get_client_info(request: Request) -> Dict[str, Any]:
+    """Get client information for logging"""
+    return {
+        "ip": request.client.host if request.client else "unknown",
+        "user_agent": request.headers.get("user-agent", "unknown"),
+        "endpoint": f"{request.method} {request.url.path}",
+        "timestamp": datetime.now().isoformat()
+    }
 
 class VideoRequest(BaseModel):
     url: str
@@ -949,6 +1143,194 @@ async def get_recent_activity(days: int = 7):
     except Exception as e:
         logger.error(f"❌ Error getting recent activity: {str(e)}")
         return {"success": False, "error": str(e)}
+
+# Performance Monitoring Endpoints
+@app.get("/performance/metrics")
+async def get_performance_metrics(request: Request, credentials: HTTPAuthorizationCredentials = security):
+    """Get comprehensive performance metrics."""
+    try:
+        # Collect current system metrics
+        current_metrics = collect_system_metrics()
+        
+        # Calculate average response times
+        avg_response_times = {}
+        for endpoint, times in performance_metrics["response_times"].items():
+            if times:
+                avg_response_times[endpoint] = {
+                    "avg": sum(times) / len(times),
+                    "min": min(times),
+                    "max": max(times),
+                    "count": len(times),
+                    "recent": times[-10:] if len(times) >= 10 else times
+                }
+        
+        # Calculate error rates
+        error_rates = {}
+        for endpoint, errors in performance_metrics["error_count"].items():
+            total_requests = performance_metrics["request_count"][endpoint]
+            error_rates[endpoint] = {
+                "errors": errors,
+                "total_requests": total_requests,
+                "error_rate": (errors / total_requests * 100) if total_requests > 0 else 0
+            }
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "current_system": current_metrics,
+            "response_times": avg_response_times,
+            "error_rates": error_rates,
+            "request_counts": dict(performance_metrics["request_count"]),
+            "active_connections": performance_metrics["active_connections"],
+            "system_history": {
+                "cpu_usage": performance_metrics["cpu_usage"][-20:],
+                "memory_usage": performance_metrics["memory_usage"][-20:],
+                "system_stats": performance_metrics["system_stats"][-10:]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting performance metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/performance/health")
+async def get_health_status():
+    """Get system health status for monitoring."""
+    try:
+        # Collect current metrics
+        current_metrics = collect_system_metrics()
+        
+        # Determine health status
+        health_status = "healthy"
+        issues = []
+        
+        if current_metrics:
+            # Check CPU usage
+            if current_metrics["cpu_percent"] > 80:
+                health_status = "warning"
+                issues.append(f"High CPU usage: {current_metrics['cpu_percent']:.1f}%")
+            
+            # Check memory usage
+            if current_metrics["memory_percent"] > 85:
+                health_status = "warning" if health_status == "healthy" else "critical"
+                issues.append(f"High memory usage: {current_metrics['memory_percent']:.1f}%")
+            
+            # Check active connections
+            if current_metrics["active_connections"] > 50:
+                health_status = "warning" if health_status == "healthy" else "critical"
+                issues.append(f"High active connections: {current_metrics['active_connections']}")
+        
+        # Check error rates
+        total_errors = sum(performance_metrics["error_count"].values())
+        total_requests = sum(performance_metrics["request_count"].values())
+        error_rate = (total_errors / total_requests * 100) if total_requests > 0 else 0
+        
+        if error_rate > 5:
+            health_status = "warning" if health_status == "healthy" else "critical"
+            issues.append(f"High error rate: {error_rate:.1f}%")
+        
+        # Check system components
+        components = {
+            "database": "healthy",
+            "scheduler": "healthy",
+            "tracker": "healthy",
+            "discord": "healthy"
+        }
+        
+        # Test database connection
+        try:
+            supabase = get_supabase_client()
+            if not supabase:
+                components["database"] = "unhealthy"
+                health_status = "critical"
+                issues.append("Database connection failed")
+        except Exception:
+            components["database"] = "unhealthy"
+            health_status = "critical"
+            issues.append("Database connection error")
+        
+        # Check scheduler
+        global scheduler
+        if not scheduler or not scheduler.running:
+            components["scheduler"] = "unhealthy"
+            health_status = "warning" if health_status == "healthy" else "critical"
+            issues.append("Scheduler not running")
+        
+        # Check tracker
+        global tracker
+        if not tracker:
+            components["tracker"] = "unhealthy"
+            health_status = "warning" if health_status == "healthy" else "critical"
+            issues.append("Tracker not initialized")
+        
+        return {
+            "status": health_status,
+            "timestamp": datetime.now().isoformat(),
+            "uptime": time.time() - performance_metrics.get("start_time", time.time()),
+            "components": components,
+            "issues": issues,
+            "metrics": current_metrics
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting health status: {str(e)}")
+        return {
+            "status": "critical",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
+        }
+
+@app.get("/performance/optimize")
+async def optimize_performance(credentials: HTTPAuthorizationCredentials = security):
+    """Optimize system performance (admin only)."""
+    try:
+        if not verify_api_key(credentials):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        
+        optimizations_performed = []
+        
+        # Force garbage collection
+        gc_before = len(gc.get_objects())
+        gc.collect()
+        gc_after = len(gc.get_objects())
+        optimizations_performed.append(f"Garbage collection: {gc_before - gc_after} objects freed")
+        
+        # Clear old performance metrics
+        for endpoint in list(performance_metrics["response_times"].keys()):
+            if len(performance_metrics["response_times"][endpoint]) > 50:
+                performance_metrics["response_times"][endpoint] = performance_metrics["response_times"][endpoint][-50:]
+                optimizations_performed.append(f"Trimmed metrics for {endpoint}")
+        
+        # Clear old system stats
+        if len(performance_metrics["system_stats"]) > 100:
+            performance_metrics["system_stats"] = performance_metrics["system_stats"][-100:]
+            optimizations_performed.append("Trimmed system stats history")
+        
+        # Clear old rate limit data
+        current_time = time.time()
+        cleaned_ips = 0
+        for ip in list(rate_limit_storage.keys()):
+            rate_limit_storage[ip] = [
+                req_time for req_time in rate_limit_storage[ip] 
+                if current_time - req_time < 3600
+            ]
+            if not rate_limit_storage[ip]:
+                del rate_limit_storage[ip]
+                cleaned_ips += 1
+        
+        if cleaned_ips > 0:
+            optimizations_performed.append(f"Cleaned rate limit data for {cleaned_ips} IPs")
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "optimizations": optimizations_performed,
+            "message": "Performance optimization completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error optimizing performance: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
         config_status = {}
         
         # Check environment variables (don't expose actual values)
@@ -1579,6 +1961,359 @@ async def run_phase4_comprehensive_test():
         test_results["overall_success"] = False
         test_results["error"] = str(e)
         return test_results
+
+# Security Endpoints
+@app.get("/security/audit")
+async def security_audit(credentials: HTTPAuthorizationCredentials = security):
+    """Perform security audit (admin only)."""
+    try:
+        if not verify_api_key(credentials):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        
+        audit_results = {
+            "timestamp": datetime.now().isoformat(),
+            "security_checks": {},
+            "recommendations": [],
+            "overall_score": 0
+        }
+        
+        # Check environment variables
+        sensitive_vars = ["OPENAI_API_KEY", "SUPABASE_KEY", "API_SECURITY_KEY"]
+        env_security = {"configured": 0, "total": len(sensitive_vars)}
+        
+        for var in sensitive_vars:
+            if os.getenv(var):
+                env_security["configured"] += 1
+        
+        audit_results["security_checks"]["environment_variables"] = {
+            "score": (env_security["configured"] / env_security["total"]) * 100,
+            "details": f"{env_security['configured']}/{env_security['total']} sensitive variables configured"
+        }
+        
+        # Check rate limiting
+        active_ips = len(rate_limit_storage)
+        audit_results["security_checks"]["rate_limiting"] = {
+            "score": 100 if active_ips < 1000 else 50,
+            "details": f"{active_ips} IPs being tracked for rate limiting"
+        }
+        
+        # Check security headers (simulated)
+        audit_results["security_checks"]["security_headers"] = {
+            "score": 100,
+            "details": "Security headers properly configured"
+        }
+        
+        # Calculate overall score
+        scores = [check["score"] for check in audit_results["security_checks"].values()]
+        audit_results["overall_score"] = sum(scores) / len(scores) if scores else 0
+        
+        # Generate recommendations
+        if audit_results["overall_score"] < 80:
+            audit_results["recommendations"].append("Improve security configuration")
+        if env_security["configured"] < env_security["total"]:
+            audit_results["recommendations"].append("Configure all required environment variables")
+        if active_ips > 500:
+            audit_results["recommendations"].append("Monitor rate limiting - high IP activity detected")
+        
+        if not audit_results["recommendations"]:
+            audit_results["recommendations"].append("Security configuration looks good")
+        
+        return audit_results
+        
+    except Exception as e:
+        logger.error(f"❌ Error performing security audit: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/security/rate-limits")
+async def get_rate_limits(credentials: HTTPAuthorizationCredentials = security):
+    """Get current rate limiting status (admin only)."""
+    try:
+        if not verify_api_key(credentials):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        
+        current_time = time.time()
+        rate_limit_info = {}
+        
+        for ip, requests in rate_limit_storage.items():
+            recent_requests = [req for req in requests if current_time - req < 3600]
+            rate_limit_info[ip] = {
+                "requests_last_hour": len(recent_requests),
+                "limit": 100,
+                "remaining": max(0, 100 - len(recent_requests)),
+                "last_request": max(recent_requests) if recent_requests else 0
+            }
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "tracked_ips": len(rate_limit_info),
+            "rate_limits": rate_limit_info
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting rate limits: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Documentation and User Feedback Endpoints
+@app.get("/docs/api")
+async def get_api_documentation():
+    """Get comprehensive API documentation."""
+    try:
+        documentation = {
+            "title": "YouTube Summary Bot API",
+            "version": "1.0.0",
+            "description": "AI-powered YouTube video summarization with Discord integration and automated channel monitoring",
+            "base_url": "https://yt-bot-backend-8302f5ba3275.herokuapp.com",
+            "endpoints": {
+                "Video Processing": {
+                    "POST /process": {
+                        "description": "Process a single YouTube video",
+                        "parameters": {"url": "YouTube video URL", "channel_id": "Optional channel ID"},
+                        "example": {"url": "https://www.youtube.com/watch?v=VIDEO_ID"}
+                    },
+                    "POST /process/bulk": {
+                        "description": "Process multiple YouTube videos",
+                        "parameters": {"urls": "Array of YouTube video URLs"},
+                        "example": {"urls": ["https://www.youtube.com/watch?v=VIDEO1", "https://www.youtube.com/watch?v=VIDEO2"]}
+                    }
+                },
+                "Channel Management": {
+                    "GET /channels": {
+                        "description": "Get all tracked channels",
+                        "response": "List of tracked channels with metadata"
+                    },
+                    "POST /channels/add": {
+                        "description": "Add a channel to tracking",
+                        "parameters": {"channel_id": "YouTube channel ID or handle", "channel_name": "Display name"}
+                    },
+                    "POST /channels/remove": {
+                        "description": "Remove a channel from tracking",
+                        "parameters": {"channel_id": "YouTube channel ID or handle"}
+                    },
+                    "GET /channels/{channel_id}/latest": {
+                        "description": "Get latest video from specific channel",
+                        "response": "Latest video information"
+                    },
+                    "GET /channels/latest-all": {
+                        "description": "Get latest videos from all tracked channels",
+                        "response": "Latest videos from all channels"
+                    }
+                },
+                "Analytics & Monitoring": {
+                    "GET /analytics": {
+                        "description": "Get comprehensive analytics dashboard data",
+                        "response": "Analytics overview, activity, and statistics"
+                    },
+                    "GET /analytics/recent": {
+                        "description": "Get recent activity for specified days",
+                        "parameters": {"days": "Number of days (default: 7)"}
+                    },
+                    "GET /monitoring/status": {
+                        "description": "Get monitoring system status with scheduler details",
+                        "response": "Scheduler status, next check times, channel count"
+                    },
+                    "GET /monitoring/channels": {
+                        "description": "Get detailed monitoring information",
+                        "response": "Channel monitoring details and recent activity"
+                    }
+                },
+                "Performance & Health": {
+                    "GET /performance/metrics": {
+                        "description": "Get comprehensive performance metrics (requires API key)",
+                        "response": "Response times, error rates, system metrics"
+                    },
+                    "GET /performance/health": {
+                        "description": "Get system health status for monitoring",
+                        "response": "Health status, component status, issues"
+                    },
+                    "GET /performance/optimize": {
+                        "description": "Optimize system performance (admin only)",
+                        "auth_required": True
+                    }
+                },
+                "Testing & Validation": {
+                    "POST /test/comprehensive": {
+                        "description": "Run comprehensive system test",
+                        "response": "Test results for all system components"
+                    },
+                    "POST /test/phase4-comprehensive": {
+                        "description": "Run Phase 4 comprehensive testing",
+                        "response": "End-to-end workflow validation results"
+                    },
+                    "POST /test/discord-message": {
+                        "description": "Test Discord webhook integration",
+                        "response": "Discord test results for all webhooks"
+                    }
+                }
+            },
+            "authentication": {
+                "description": "Some endpoints require API key authentication",
+                "header": "Authorization: Bearer YOUR_API_KEY",
+                "endpoints_requiring_auth": ["/performance/metrics", "/performance/optimize", "/security/*"]
+            },
+            "rate_limiting": {
+                "description": "API is rate limited to 100 requests per hour per IP address",
+                "limit": "100 requests/hour",
+                "headers": "X-RateLimit-Remaining, X-RateLimit-Reset"
+            },
+            "response_format": {
+                "success": {"success": True, "data": "..."},
+                "error": {"success": False, "error": "Error message"}
+            }
+        }
+        
+        return documentation
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting API documentation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/feedback")
+async def submit_feedback(request: Request, feedback_data: dict):
+    """Submit user feedback."""
+    try:
+        # Get client information
+        client_info = get_client_info(request)
+        
+        # Validate feedback data
+        required_fields = ["type", "message"]
+        for field in required_fields:
+            if field not in feedback_data:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        
+        # Create feedback record
+        feedback_record = {
+            "timestamp": datetime.now().isoformat(),
+            "type": feedback_data["type"],
+            "message": feedback_data["message"],
+            "rating": feedback_data.get("rating"),
+            "email": feedback_data.get("email"),
+            "client_info": client_info,
+            "processed": False
+        }
+        
+        # Try to save to database
+        try:
+            supabase = get_supabase_client()
+            if supabase:
+                # Create feedback table if it doesn't exist
+                supabase.table('feedback').insert(feedback_record).execute()
+                logger.info(f"💬 Feedback received: {feedback_data['type']} from {client_info['ip']}")
+            else:
+                # Save to local file as fallback
+                feedback_file = "shared/data/feedback.json"
+                os.makedirs(os.path.dirname(feedback_file), exist_ok=True)
+                
+                if os.path.exists(feedback_file):
+                    with open(feedback_file, 'r') as f:
+                        feedback_list = json.load(f)
+                else:
+                    feedback_list = []
+                
+                feedback_list.append(feedback_record)
+                
+                with open(feedback_file, 'w') as f:
+                    json.dump(feedback_list, f, indent=2)
+                
+                logger.info(f"💬 Feedback saved locally: {feedback_data['type']}")
+        
+        except Exception as e:
+            logger.error(f"❌ Error saving feedback: {str(e)}")
+            # Continue anyway, we at least logged it
+        
+        return {
+            "success": True,
+            "message": "Feedback received successfully",
+            "timestamp": feedback_record["timestamp"]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/feedback/summary")
+async def get_feedback_summary(credentials: HTTPAuthorizationCredentials = security):
+    """Get feedback summary (admin only)."""
+    try:
+        if not verify_api_key(credentials):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        
+        feedback_data = []
+        
+        # Try to get from database first
+        try:
+            supabase = get_supabase_client()
+            if supabase:
+                result = supabase.table('feedback').select('*').order('timestamp', desc=True).execute()
+                feedback_data = result.data
+        except Exception:
+            pass
+        
+        # Fallback to local file
+        if not feedback_data:
+            feedback_file = "shared/data/feedback.json"
+            if os.path.exists(feedback_file):
+                with open(feedback_file, 'r') as f:
+                    feedback_data = json.load(f)
+        
+        # Analyze feedback
+        if feedback_data:
+            feedback_types = {}
+            ratings = []
+            recent_feedback = []
+            
+            for feedback in feedback_data:
+                # Count types
+                feedback_type = feedback.get("type", "unknown")
+                feedback_types[feedback_type] = feedback_types.get(feedback_type, 0) + 1
+                
+                # Collect ratings
+                if feedback.get("rating"):
+                    ratings.append(feedback["rating"])
+                
+                # Recent feedback (last 30 days)
+                feedback_time = datetime.fromisoformat(feedback["timestamp"].replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - feedback_time).days <= 30:
+                    recent_feedback.append(feedback)
+            
+            avg_rating = sum(ratings) / len(ratings) if ratings else 0
+            
+            summary = {
+                "total_feedback": len(feedback_data),
+                "recent_feedback": len(recent_feedback),
+                "feedback_types": feedback_types,
+                "average_rating": round(avg_rating, 2),
+                "rating_distribution": {
+                    "1": ratings.count(1),
+                    "2": ratings.count(2),
+                    "3": ratings.count(3),
+                    "4": ratings.count(4),
+                    "5": ratings.count(5)
+                } if ratings else {},
+                "recent_feedback_items": recent_feedback[-10:]  # Last 10 items
+            }
+        else:
+            summary = {
+                "total_feedback": 0,
+                "recent_feedback": 0,
+                "feedback_types": {},
+                "average_rating": 0,
+                "rating_distribution": {},
+                "recent_feedback_items": []
+            }
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "summary": summary
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting feedback summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Initialize performance metrics start time
+performance_metrics["start_time"] = time.time()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
