@@ -1102,5 +1102,218 @@ async def analytics_recent():
         logger.error(f"❌ Error getting recent analytics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/test/discord-config")
+async def test_discord_config():
+    """Test Discord webhook configuration."""
+    try:
+        webhooks = {
+            "uploads": bool(os.getenv('DISCORD_UPLOADS_WEBHOOK')),
+            "transcripts": bool(os.getenv('DISCORD_TRANSCRIPTS_WEBHOOK')),
+            "summaries": bool(os.getenv('DISCORD_SUMMARIES_WEBHOOK')),
+            "daily_report": bool(os.getenv('DISCORD_DAILY_REPORT_WEBHOOK'))
+        }
+        
+        webhook_urls = {}
+        if webhooks["uploads"]:
+            webhook_urls["uploads"] = os.getenv('DISCORD_UPLOADS_WEBHOOK')[:50] + "..."
+        if webhooks["transcripts"]:
+            webhook_urls["transcripts"] = os.getenv('DISCORD_TRANSCRIPTS_WEBHOOK')[:50] + "..."
+        if webhooks["summaries"]:
+            webhook_urls["summaries"] = os.getenv('DISCORD_SUMMARIES_WEBHOOK')[:50] + "..."
+        if webhooks["daily_report"]:
+            webhook_urls["daily_report"] = os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')[:50] + "..."
+            
+        return {
+            "success": True,
+            "webhooks_configured": webhooks,
+            "webhook_previews": webhook_urls,
+            "total_configured": sum(webhooks.values())
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking Discord config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/test/discord-message")
+async def test_discord_message():
+    """Send a test message to all configured Discord webhooks."""
+    try:
+        results = {}
+        test_message = f"🧪 **Test Message** - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nTesting Discord integration from YouTube Summary Bot!"
+        
+        webhooks = {
+            "uploads": os.getenv('DISCORD_UPLOADS_WEBHOOK'),
+            "transcripts": os.getenv('DISCORD_TRANSCRIPTS_WEBHOOK'),
+            "summaries": os.getenv('DISCORD_SUMMARIES_WEBHOOK'),
+            "daily_report": os.getenv('DISCORD_DAILY_REPORT_WEBHOOK')
+        }
+        
+        for webhook_type, webhook_url in webhooks.items():
+            if webhook_url:
+                try:
+                    success = await send_discord_message(webhook_url, test_message)
+                    results[webhook_type] = {"success": success, "message": "Message sent successfully" if success else "Failed to send message"}
+                except Exception as e:
+                    results[webhook_type] = {"success": False, "message": f"Error: {str(e)}"}
+            else:
+                results[webhook_type] = {"success": False, "message": "Webhook not configured"}
+        
+        return {
+            "success": True,
+            "results": results,
+            "message": "Discord test completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error testing Discord: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/channels/{channel_id}/latest")
+async def get_channel_latest_video(channel_id: str):
+    """Get the latest video from a specific channel."""
+    global tracker
+    
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+    
+    try:
+        # Get latest video info from the channel
+        latest_video = await tracker.get_latest_video_info(channel_id)
+        
+        if latest_video:
+            return {
+                "success": True,
+                "channel_id": channel_id,
+                "latest_video": latest_video
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"No latest video found for channel {channel_id}"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting latest video for channel {channel_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/channels/latest-all")
+async def get_all_channels_latest():
+    """Get the latest video from all tracked channels."""
+    global tracker
+    
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+    
+    try:
+        channels = tracker.get_tracked_channels()
+        results = {}
+        
+        for channel_id, channel_info in channels.items():
+            try:
+                latest_video = await tracker.get_latest_video_info(channel_id)
+                results[channel_id] = {
+                    "channel_name": channel_info.get("name", channel_id),
+                    "latest_video": latest_video,
+                    "success": True
+                }
+            except Exception as e:
+                results[channel_id] = {
+                    "channel_name": channel_info.get("name", channel_id),
+                    "latest_video": None,
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        return {
+            "success": True,
+            "channels": results,
+            "total_channels": len(channels)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting latest videos: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/test/comprehensive")
+async def run_comprehensive_test():
+    """Run comprehensive end-to-end testing."""
+    global tracker
+    
+    test_results = {
+        "timestamp": datetime.now().isoformat(),
+        "tests": {},
+        "overall_success": True
+    }
+    
+    try:
+        # Test 1: Database Connection
+        try:
+            from shared.supabase_utils import get_supabase_client
+            supabase = get_supabase_client()
+            if supabase:
+                test_results["tests"]["database_connection"] = {"success": True, "message": "Supabase connected"}
+            else:
+                test_results["tests"]["database_connection"] = {"success": False, "message": "Supabase not available"}
+        except Exception as e:
+            test_results["tests"]["database_connection"] = {"success": False, "message": f"Database error: {str(e)}"}
+            test_results["overall_success"] = False
+        
+        # Test 2: Tracker Initialization
+        if tracker:
+            test_results["tests"]["tracker_initialization"] = {"success": True, "message": "Tracker initialized"}
+        else:
+            test_results["tests"]["tracker_initialization"] = {"success": False, "message": "Tracker not initialized"}
+            test_results["overall_success"] = False
+        
+        # Test 3: Channel Tracking
+        try:
+            channels = tracker.get_tracked_channels() if tracker else {}
+            test_results["tests"]["channel_tracking"] = {
+                "success": len(channels) > 0,
+                "message": f"Tracking {len(channels)} channels",
+                "channels": list(channels.keys())
+            }
+        except Exception as e:
+            test_results["tests"]["channel_tracking"] = {"success": False, "message": f"Channel tracking error: {str(e)}"}
+            test_results["overall_success"] = False
+        
+        # Test 4: Discord Configuration
+        webhooks_configured = 0
+        for webhook_type in ["DISCORD_UPLOADS_WEBHOOK", "DISCORD_TRANSCRIPTS_WEBHOOK", "DISCORD_SUMMARIES_WEBHOOK", "DISCORD_DAILY_REPORT_WEBHOOK"]:
+            if os.getenv(webhook_type):
+                webhooks_configured += 1
+        
+        test_results["tests"]["discord_configuration"] = {
+            "success": webhooks_configured > 0,
+            "message": f"{webhooks_configured}/4 Discord webhooks configured",
+            "configured_count": webhooks_configured
+        }
+        
+        # Test 5: Scheduler Status
+        global scheduler
+        if scheduler and scheduler.running:
+            test_results["tests"]["scheduler"] = {"success": True, "message": "Scheduler running"}
+        else:
+            test_results["tests"]["scheduler"] = {"success": False, "message": "Scheduler not running"}
+            test_results["overall_success"] = False
+        
+        # Test 6: OpenAI Configuration
+        try:
+            from shared.config_service import ConfigService
+            config = ConfigService()
+            api_key = config.get_openai_api_key()
+            test_results["tests"]["openai_config"] = {"success": bool(api_key), "message": "OpenAI API key configured" if api_key else "OpenAI API key missing"}
+        except Exception as e:
+            test_results["tests"]["openai_config"] = {"success": False, "message": f"OpenAI config error: {str(e)}"}
+            test_results["overall_success"] = False
+        
+        return test_results
+        
+    except Exception as e:
+        logger.error(f"❌ Error running comprehensive test: {str(e)}")
+        test_results["overall_success"] = False
+        test_results["error"] = str(e)
+        return test_results
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

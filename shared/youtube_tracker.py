@@ -760,3 +760,67 @@ class YouTubeTracker:
         except Exception as e:
             self.logger.error(f"Error checking for new videos from {channel_id}: {e}")
             return []
+    
+    async def get_latest_video_info(self, channel_id: str) -> Optional[Dict]:
+        """Get the latest video information from a channel.
+        
+        Args:
+            channel_id (str): YouTube channel ID or handle
+            
+        Returns:
+            Optional[Dict]: Latest video info or None if not found
+        """
+        try:
+            # Extract the real channel ID from handle if needed
+            real_channel_id = extract_channel_id(channel_id)
+            if not real_channel_id:
+                self.logger.error(f"Failed to extract channel ID from {channel_id}")
+                return None
+            
+            # Get RSS feed URL
+            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={real_channel_id}"
+            
+            self.logger.info(f"Fetching latest video from {channel_id} (ID: {real_channel_id})")
+            
+            # Fetch RSS feed
+            response = requests.get(rss_url, timeout=10)
+            response.raise_for_status()
+            
+            # Parse XML
+            root = ET.fromstring(response.content)
+            
+            # Extract namespace
+            namespace = {'atom': 'http://www.w3.org/2005/Atom', 
+                        'yt': 'http://www.youtube.com/xml/schemas/2015',
+                        'media': 'http://search.yahoo.com/mrss/'}
+            
+            # Find the first (latest) video entry
+            entry = root.find('.//atom:entry', namespace)
+            if entry is None:
+                self.logger.warning(f"No video entries found for channel {channel_id}")
+                return None
+            
+            # Extract video information
+            video_id = entry.find('.//yt:videoId', namespace).text
+            title = entry.find('.//atom:title', namespace).text
+            published = entry.find('.//atom:published', namespace).text
+            author = entry.find('.//atom:author/atom:name', namespace).text
+            
+            # Get video URL
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            video_info = {
+                'id': video_id,
+                'title': title,
+                'url': video_url,
+                'published': published,
+                'author': author,
+                'channel_id': real_channel_id
+            }
+            
+            self.logger.info(f"Latest video from {channel_id}: {title}")
+            return video_info
+            
+        except Exception as e:
+            self.logger.error(f"Error getting latest video from {channel_id}: {e}")
+            return None
