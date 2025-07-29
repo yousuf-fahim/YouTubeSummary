@@ -3,7 +3,16 @@
   "outputDirectory": ".next",
   "installCommand": "npm install",
   "devCommand": "npm run dev",
+  "framework": "nextjs",
+  "functions": {
+    "app/api/**/*.ts": {
+      "maxDuration": 30
+    }
+  },
+  "regions": ["iad1"],
   "env": {
-    "NEXT_PUBLIC_API_URL": "https://yt-bot-backend-8302f5ba3275.herokuapp.com"
+    "NEXT_PUBLIC_API_URL": "https://yt-bot-backend-8302f5ba3275.herokuapp.com",
+    "NEXT_PUBLIC_APP_NAME": "YouTube Summary Bot",
+    "NEXT_PUBLIC_APP_DESCRIPTION": "AI-powered YouTube video summarization and tracking"
   }
 }

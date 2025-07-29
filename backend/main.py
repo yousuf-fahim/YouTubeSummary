@@ -1012,8 +1012,8 @@ async def analytics_overview():
         total_summaries = summaries_response.count if summaries_response.count else 0
         
         # Get channel distribution
-        channels_response = supabase.table('tracked_channels').select('channel_name').execute()
-        channels = [ch['channel_name'] for ch in channels_response.data] if channels_response.data else []
+        channels_response = supabase.table('tracked_channels').select('channel').execute()
+        channels = [ch['channel'] for ch in channels_response.data] if channels_response.data else []
         
         # Get recent activity (last 7 days)
         seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
