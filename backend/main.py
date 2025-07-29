@@ -1661,6 +1661,65 @@ async def get_all_channels_latest():
         logger.error(f"❌ Error getting latest videos: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Enhanced Channel Tracking Endpoints
+@app.get("/enhanced/channels")
+async def get_enhanced_channels():
+    """Get tracked channels with enhanced video information."""
+    try:
+        from shared.enhanced_tracker import enhanced_tracker
+        result = enhanced_tracker.get_tracked_channels()
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error getting enhanced channels: {str(e)}")
+        return {"success": False, "error": str(e), "channels": {}, "count": 0}
+
+class EnhancedChannelRequest(BaseModel):
+    channel_input: str
+
+@app.post("/enhanced/channels/add")
+async def add_enhanced_channel(request: EnhancedChannelRequest):
+    """Add a channel to enhanced tracking with validation."""
+    try:
+        from shared.enhanced_tracker import enhanced_tracker
+        result = enhanced_tracker.add_channel(request.channel_input)
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error adding enhanced channel: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.delete("/enhanced/channels/{channel_id}")
+async def remove_enhanced_channel(channel_id: str):
+    """Remove a channel from enhanced tracking."""
+    try:
+        from shared.enhanced_tracker import enhanced_tracker
+        result = enhanced_tracker.remove_channel(channel_id)
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error removing enhanced channel: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/enhanced/channels/{channel_id}/refresh")
+async def refresh_enhanced_channel(channel_id: str):
+    """Refresh latest videos for a specific channel."""
+    try:
+        from shared.enhanced_tracker import enhanced_tracker
+        result = enhanced_tracker.refresh_channel_videos(channel_id)
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error refreshing enhanced channel: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/enhanced/channels/refresh")
+async def refresh_all_enhanced_channels():
+    """Refresh latest videos for all channels."""
+    try:
+        from shared.enhanced_tracker import enhanced_tracker
+        result = enhanced_tracker.refresh_channel_videos()
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error refreshing all enhanced channels: {str(e)}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/test/comprehensive")
 async def run_comprehensive_test():
     """Run comprehensive end-to-end testing."""
