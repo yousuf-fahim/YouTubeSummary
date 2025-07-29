@@ -345,13 +345,13 @@ async def generate_summary_with_functions(transcript, api_key, system_message, f
                 }
                 
                 payload = {
-                    "model": "gpt-3.5-turbo-0125",  # Model with function calling support
+                    "model": "gpt-3.5-turbo-0125",  # Model with tool calling support
                     "messages": [
                         {"role": "system", "content": system_message},
                         {"role": "user", "content": transcript}
                     ],
-                    "functions": functions,
-                    "function_call": {"name": function_name},
+                    "tools": [{"type": "function", "function": func} for func in functions],
+                    "tool_choice": {"type": "function", "function": {"name": function_name}},
                     "temperature": 0.3
                 }
                 
@@ -369,16 +369,20 @@ async def generate_summary_with_functions(transcript, api_key, system_message, f
                     if response.status == 200:
                         result = json.loads(response_text)
                         try:
-                            # Extract function call arguments
-                            function_call = result["choices"][0]["message"]["function_call"]
-                            if function_call and function_call["name"] == function_name:
-                                function_args = json.loads(function_call["arguments"])
-                                print(f"Successfully called function: {function_name}")
-                                return function_args
+                            # Extract tool call arguments
+                            message = result["choices"][0]["message"]
+                            if "tool_calls" in message and message["tool_calls"]:
+                                tool_call = message["tool_calls"][0]
+                                if tool_call["type"] == "function" and tool_call["function"]["name"] == function_name:
+                                    function_args = json.loads(tool_call["function"]["arguments"])
+                                    print(f"Successfully called function: {function_name}")
+                                    return function_args
+                                else:
+                                    print(f"Expected function {function_name} was not called")
                             else:
-                                print(f"Expected function {function_name} was not called")
+                                print("No tool calls found in response")
                         except (KeyError, json.JSONDecodeError) as e:
-                            print(f"Failed to parse function call: {e}")
+                            print(f"Failed to parse tool call: {e}")
                     elif response.status == 429:  # Rate limit error
                         print(f"Rate limit reached. Retrying after delay. Attempt {attempt+1}/{max_retries}")
                         if attempt < max_retries - 1:
